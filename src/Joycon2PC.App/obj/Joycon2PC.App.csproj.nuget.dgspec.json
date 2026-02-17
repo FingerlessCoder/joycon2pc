@@ -1,0 +1,245 @@
+{
+  "format": 1,
+  "restore": {
+    "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.App\\Joycon2PC.App.csproj": {}
+  },
+  "projects": {
+    "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.App\\Joycon2PC.App.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.App\\Joycon2PC.App.csproj",
+        "projectName": "Joycon2PC.App",
+        "projectPath": "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.App\\Joycon2PC.App.csproj",
+        "packagesPath": "C:\\Users\\wilso\\.nuget\\packages\\",
+        "outputPath": "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.App\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\wilso\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net7.0-windows10.0.22621.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net7.0-windows10.0.22621": {
+            "targetAlias": "net7.0-windows10.0.22621.0",
+            "projectReferences": {
+              "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.Core\\Joycon2PC.Core.csproj": {
+                "projectPath": "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.Core\\Joycon2PC.Core.csproj"
+              },
+              "C:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.ViGEm\\Joycon2PC.ViGEm.csproj": {
+                "projectPath": "C:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.ViGEm\\Joycon2PC.ViGEm.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.300"
+      },
+      "frameworks": {
+        "net7.0-windows10.0.22621": {
+          "targetAlias": "net7.0-windows10.0.22621.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.AspNetCore.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            },
+            {
+              "name": "Microsoft.NETCore.App.Host.win-x64",
+              "version": "[7.0.20, 7.0.20]"
+            },
+            {
+              "name": "Microsoft.NETCore.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            },
+            {
+              "name": "Microsoft.Windows.SDK.NET.Ref",
+              "version": "[10.0.22621.55, 10.0.22621.55]"
+            },
+            {
+              "name": "Microsoft.WindowsDesktop.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            }
+          ],
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            },
+            "Microsoft.Windows.SDK.NET.Ref.Windows": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.308\\RuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.Core\\Joycon2PC.Core.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.Core\\Joycon2PC.Core.csproj",
+        "projectName": "Joycon2PC.Core",
+        "projectPath": "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.Core\\Joycon2PC.Core.csproj",
+        "packagesPath": "C:\\Users\\wilso\\.nuget\\packages\\",
+        "outputPath": "c:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.Core\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\wilso\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net7.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net7.0": {
+            "targetAlias": "net7.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.300"
+      },
+      "frameworks": {
+        "net7.0": {
+          "targetAlias": "net7.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.AspNetCore.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            },
+            {
+              "name": "Microsoft.NETCore.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            },
+            {
+              "name": "Microsoft.WindowsDesktop.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            }
+          ],
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.308\\RuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "C:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.ViGEm\\Joycon2PC.ViGEm.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "C:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.ViGEm\\Joycon2PC.ViGEm.csproj",
+        "projectName": "Joycon2PC.ViGEm",
+        "projectPath": "C:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.ViGEm\\Joycon2PC.ViGEm.csproj",
+        "packagesPath": "C:\\Users\\wilso\\.nuget\\packages\\",
+        "outputPath": "C:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.ViGEm\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\wilso\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net7.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net7.0": {
+            "targetAlias": "net7.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.300"
+      },
+      "frameworks": {
+        "net7.0": {
+          "targetAlias": "net7.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.AspNetCore.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            },
+            {
+              "name": "Microsoft.NETCore.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            },
+            {
+              "name": "Microsoft.WindowsDesktop.App.Ref",
+              "version": "[7.0.20, 7.0.20]"
+            }
+          ],
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.308\\RuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

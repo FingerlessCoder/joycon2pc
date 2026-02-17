@@ -1,0 +1,11 @@
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\bin\Debug\net7.0\Joycon2PC.Core.deps.json
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\bin\Debug\net7.0\Joycon2PC.Core.dll
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\bin\Debug\net7.0\Joycon2PC.Core.pdb
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\obj\Debug\net7.0\Joycon2PC.Core.GeneratedMSBuildEditorConfig.editorconfig
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\obj\Debug\net7.0\Joycon2PC.Core.AssemblyInfoInputs.cache
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\obj\Debug\net7.0\Joycon2PC.Core.AssemblyInfo.cs
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\obj\Debug\net7.0\Joycon2PC.Core.csproj.CoreCompileInputs.cache
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\obj\Debug\net7.0\Joycon2PC.Core.dll
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\obj\Debug\net7.0\refint\Joycon2PC.Core.dll
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\obj\Debug\net7.0\Joycon2PC.Core.pdb
+c:\Users\wilso\Desktop\joycon2\src\Joycon2PC.Core\obj\Debug\net7.0\ref\Joycon2PC.Core.dll

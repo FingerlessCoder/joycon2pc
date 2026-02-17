@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "Sar5CsfXy6M=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\wilso\\Desktop\\joycon2\\src\\Joycon2PC.ViGEm\\Joycon2PC.ViGEm.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\wilso\\.nuget\\packages\\microsoft.netcore.app.ref\\7.0.20\\microsoft.netcore.app.ref.7.0.20.nupkg.sha512",
+    "C:\\Users\\wilso\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\7.0.20\\microsoft.windowsdesktop.app.ref.7.0.20.nupkg.sha512",
+    "C:\\Users\\wilso\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\7.0.20\\microsoft.aspnetcore.app.ref.7.0.20.nupkg.sha512"
+  ],
+  "logs": []
+}
