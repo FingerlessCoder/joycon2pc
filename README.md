@@ -50,9 +50,51 @@ Connects both Joy-Con 2 (L) and (R), merges them into one virtual gamepad. No US
 
 ---
 
-## What's Not Done / Known Limitations ❌
+## Roadmap / Dev Checklist
 
-### Input
+### 🔴 High priority
+- [ ] **Reduce build size** — current self-contained EXE is ~190 MB (full .NET 9 runtime bundled); switch to framework-dependent publish → ~28 MB with no code changes needed; self-contained cannot be trimmed (WinForms limitation)
+- [ ] **Auto-reconnect on sleep/resume** — Windows drops BLE on sleep; add `SystemEvents.PowerModeChanged` listener to trigger reconnect automatically
+- [ ] **Single Joy-Con sideways mode** — rotated button mapping when used alone (SL/SR → LB/RB, D-pad becomes face buttons for Joy-Con L sideways)
+- [ ] **SL / SR forwarding** — parsed but not sent to ViGEm; map to bumpers
+
+### 🟡 Medium priority
+- [ ] **Grip button forwarding** — GripLeft/GripRight not forwarded to Xbox; no standard equivalent — could use custom paddles mapping
+- [ ] **Capture button** — no Xbox equivalent; could map to `Back`+`Guide` chord
+- [ ] **Stick dead-zone / calibration UI** — hardcoded factory values (centre=1998, range 746–3249); add per-controller calibration
+- [ ] **System tray / background mode** — minimize to tray while gaming
+- [ ] **DS4 / DualSense output option** — add PS4 ViGEm target for games with better PlayStation support
+
+### 🟢 Low priority / research
+- [ ] **IMU / gyroscope** — parse bytes [16..62]; implement gyro-mouse mode for FPS aiming
+- [ ] **Vibration command format** — current NS2 rumble payload is unconfirmed; needs testing with real game rumble patterns
+- [ ] **NS2 Pro Controller** — extend device filter and test
+- [ ] **Per-game button remapping UI** — profile system with save/load
+- [ ] **Battery level display** — likely encoded in bytes [16..62]
+
+---
+
+### 🔧 Refactor / Repo cleanup
+- [ ] **Split `BLEScanner.cs`** (~400 lines mixing scan + GATT + rumble) into `BLEScanner.cs` (scan only) + `BLEConnection.cs` (per-device GATT lifecycle)
+- [ ] **Split `MainForm.cs`** (~1100 lines mixing UI + parsing + state) — extract `JoyconInputHandler.cs` for report parsing and state merge
+- [ ] **Remove `SubcommandManager.cs` dependency** — NS2 uses `WriteWithoutResponse`; the ACK-based queue adds complexity for no benefit
+- [ ] **Clean up `Joycon2PC.App.csproj`** — ~20 lines of stale comments about removed packages
+
+---
+
+### 📦 Build size
+
+| Artifact | Extra flags | Size |
+|---|---|---|
+| Current (self-contained, untrimmed) | *(as-is)* | ~190 MB |
+| Framework-dependent *(recommended — requires [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0))* | `--self-contained false` | ~28 MB |
+| Trimming | not possible — WinForms blocks IL trimming | — |
+
+**Recommendation:** Switch the default release to framework-dependent (~28 MB). Most Windows 11 gamers already have .NET 9. Keep self-contained as a fallback for those who don't.
+
+---
+
+## What's Not Done / Known Limitations ❌
 - [ ] **Single Joy-Con sideways orientation** — rotated button layout (e.g. d-pad on right) for single-Joy-Con games not implemented
 - [ ] **SL / SR forwarding** — bits are parsed but not mapped to any Xbox button (no standard Xbox equivalent; could map to LB/RB override)
 - [ ] **Grip buttons forwarding** — parsed correctly but not forwarded to ViGEm (no Xbox equivalent; could map to a custom profile)
@@ -90,15 +132,20 @@ dotnet build src/Joycon2PC.App/Joycon2PC.App.csproj -c Release
 # Output: src/Joycon2PC.App/bin/Release/net9.0-windows10.0.22621.0/
 ```
 
-### Publish single-file EXE (self-contained)
+### Publish EXE
 
+**Framework-dependent (~28 MB, recommended — requires [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0)):**
 ```bash
 dotnet publish src/Joycon2PC.App/Joycon2PC.App.csproj ^
-  -c Release ^
-  -r win-x64 ^
-  --self-contained true ^
-  -p:PublishSingleFile=true ^
-  -p:IncludeNativeLibrariesForSelfExtract=true ^
+  -c Release -r win-x64 --self-contained false ^
+  -p:PublishSingleFile=true -o publish/
+```
+
+**Self-contained (~190 MB, no .NET install needed):**
+```bash
+dotnet publish src/Joycon2PC.App/Joycon2PC.App.csproj ^
+  -c Release -r win-x64 --self-contained true ^
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true ^
   -o publish/
 ```
 
