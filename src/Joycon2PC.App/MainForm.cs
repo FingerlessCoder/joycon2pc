@@ -293,6 +293,16 @@ namespace Joycon2PC.App
             {
                 _bridge = new Joycon2PC.ViGEm.ViGEmBridge();
                 _bridge.Connect();
+
+                // Forward XInput rumble commands back to physical Joy-Con 2 controllers.
+                // Games that use rumble will cause the Joy-Con 2 to vibrate.
+                _bridge.RumbleReceived += (large, small) =>
+                {
+                    var sc = _scanner;
+                    if (sc != null)
+                        _ = sc.SendRumbleAsync(large, small);
+                };
+
                     Invoke(() =>
                 {
                     _lblVigemStatus.Text      = "✔  Driver found — virtual controller ready";
@@ -864,14 +874,33 @@ namespace Joycon2PC.App
                 }
             }
 
-            // Pass 4: last resort fallback
-            if (newLeft == null && newRight == null)
+            // Pass 4: single Joy-Con — if only one device connected, assign it as its own side
+            // and mark the other side as the SAME device (isSingleDevice path in MergeDeviceStates).
+            if (ids.Length == 1)
             {
-                newLeft  = ids[0];
-                newRight = ids.Length >= 2 ? ids[1] : ids[0];
+                // Only one controller — figure out which side it is from name/PnP,
+                // then assign both pointers to it so MergeDeviceStates uses its full axes.
+                string solo = ids[0];
+                string soloName = scanner.GetDeviceName(solo);
+                if (soloName.Contains("(R)", StringComparison.OrdinalIgnoreCase))
+                {
+                    newRight = solo;
+                    newLeft  = solo; // will trigger isSingleDevice path
+                }
+                else
+                {
+                    newLeft  = solo;
+                    newRight = solo; // will trigger isSingleDevice path
+                }
+                Console.WriteLine($"[Assign] Single Joy-Con mode: {soloName} — both slots → {solo[..Math.Min(8,solo.Length)]}");
             }
-            else if (newLeft == null)  newLeft  = newRight;
-            else if (newRight == null) newRight = newLeft;
+            else
+            {
+                // Two or more — last resort
+                if (newLeft  == null && newRight == null) { newLeft = ids[0]; newRight = ids[1]; }
+                else if (newLeft  == null) newLeft  = newRight;
+                else if (newRight == null) newRight = newLeft;
+            }
 
             _leftDeviceId  = newLeft;
             _rightDeviceId = newRight;
@@ -910,13 +939,26 @@ namespace Joycon2PC.App
 
             if (isSingleDevice)
             {
-                // Single controller — full four-axis read from the one device
+                // Single controller — use whichever stick bytes are NOT at sentinel (1998).
+                // Joy-Con L: real data on LeftStick bytes [10..12], RightStick = 1998
+                // Joy-Con R: real data on RightStick bytes [13..15], LeftStick = 1998
                 if (_deviceStates.TryGetValue(_leftDeviceId!, out var s))
                 {
-                    merged.LeftStickX  = s.LeftStickX;
-                    merged.LeftStickY  = s.LeftStickY;
-                    merged.RightStickX = s.RightStickX;
-                    merged.RightStickY = s.RightStickY;
+                    bool lReal = Math.Abs(s.LeftStickX  - 1998) > 50 || Math.Abs(s.LeftStickY  - 1998) > 50;
+                    bool rReal = Math.Abs(s.RightStickX - 1998) > 50 || Math.Abs(s.RightStickY - 1998) > 50;
+
+                    if (rReal && !lReal)
+                    {
+                        // Joy-Con R solo: physical stick → LeftStick output (primary axis for games)
+                        merged.LeftStickX  = s.RightStickX;
+                        merged.LeftStickY  = s.RightStickY;
+                    }
+                    else
+                    {
+                        // Joy-Con L solo or unknown: physical stick → LeftStick output
+                        merged.LeftStickX  = s.LeftStickX;
+                        merged.LeftStickY  = s.LeftStickY;
+                    }
                 }
             }
             else if (dualMode)

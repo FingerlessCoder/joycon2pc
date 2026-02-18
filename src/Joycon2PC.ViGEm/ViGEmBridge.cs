@@ -28,6 +28,13 @@ namespace Joycon2PC.ViGEm
         private const int NS2_CENTRE = 1998;
         private const int NS2_RANGE  = 3249 - 746;   // ≈ 2503 counts each side (asymmetric)
 
+        /// <summary>
+        /// Fired when the game/OS sends a rumble command to the virtual Xbox controller.
+        /// Parameters: (largeMotor 0–255, smallMotor 0–255).
+        /// Subscribe to this to forward haptic feedback to the physical Joy-Con 2.
+        /// </summary>
+        public event Action<byte, byte>? RumbleReceived;
+
         public ViGEmBridge() { }
 
         public void Connect()
@@ -37,6 +44,10 @@ namespace Joycon2PC.ViGEm
                 _client = new ViGEmClient();
                 _controller = _client.CreateXbox360Controller();
                 _controller.AutoSubmitReport = false; // batch all changes then submit once
+                _controller.FeedbackReceived += (sender, e) =>
+                {
+                    RumbleReceived?.Invoke(e.LargeMotor, e.SmallMotor);
+                };
                 _controller.Connect();
                 _connected = true;
                 Console.WriteLine("[ViGEmBridge] Virtual Xbox 360 controller connected.");

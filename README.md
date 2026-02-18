@@ -45,18 +45,19 @@ Connects both Joy-Con 2 (L) and (R), merges them into one virtual gamepad. No US
 - [x] Player LED set after connect (L = P1, R = P2, stops pairing blink)
 - [x] Reconnect button (handles silent BLE disconnects from Windows)
 - [x] Virtual Xbox 360 controller output via ViGEmBus
+- [x] Rumble / haptics forwarded from XInput → physical Joy-Con 2 (game rumble triggers controller vibration)
+- [x] Single Joy-Con mode — one Joy-Con alone maps its stick to the left-stick output automatically
 
 ---
 
 ## What's Not Done / Known Limitations ❌
 
 ### Input
-- [ ] **Single Joy-Con mode** — using one Joy-Con alone in sideways orientation (rotated button mapping not implemented)
+- [ ] **Single Joy-Con sideways orientation** — rotated button layout (e.g. d-pad on right) for single-Joy-Con games not implemented
 - [ ] **SL / SR forwarding** — bits are parsed but not mapped to any Xbox button (no standard Xbox equivalent; could map to LB/RB override)
 - [ ] **Grip buttons forwarding** — parsed correctly but not forwarded to ViGEm (no Xbox equivalent; could map to a custom profile)
 
 ### Hardware Features
-- [ ] **Rumble / haptics** — `SubcommandBuilder.BuildNS2Rumble()` exists but is never called; no XInput → Joy-Con rumble feedback loop
 - [ ] **IMU / gyroscope / accelerometer** — report bytes beyond [15] are not parsed; no mouse-emulation or motion control mode
 - [ ] **IR camera** — Joy-Con 2 R has an infrared camera; protocol not reversed; not planned short-term
 - [ ] **Gyro mouse cursor mode** — Joy-Con 2 supports gyro pointer on Switch 2; not implemented
@@ -65,7 +66,6 @@ Connects both Joy-Con 2 (L) and (R), merges them into one virtual gamepad. No US
 ### Software
 - [ ] **Release binary / installer** — no compiled `.exe` published yet; must build from source
 - [ ] **Single-device fallback** — if only one Joy-Con connects, the merged stick output may be incorrect (sentinel detection may assign both L and R to the same device)
-- [ ] **Dead BLEAK/Shiny code path** — the `#if BLEAK` reflection-based scanner block in `BLEScanner.cs` is unused dead code; should be removed
 - [ ] **Auto-reconnect on sleep/resume** — Windows BLE stack drops connections on sleep; Reconnect button is a manual workaround
 - [ ] **System tray / background mode** — app window must stay open; no minimise-to-tray
 - [ ] **Virtual DS4 / DualSense output** — only Xbox 360 (XInput) output; no PlayStation controller emulation
