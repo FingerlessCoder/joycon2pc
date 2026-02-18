@@ -7,7 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\joycon2\src\Joycon2PC.Core\Joycon2PC.Core.csproj" Condition="false" />
+    <ProjectReference Include="..\Joycon2PC.Core\Joycon2PC.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Nefarius.ViGEm.Client" Version="1.17.175" />
   </ItemGroup>
 
 </Project>

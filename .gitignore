@@ -1,0 +1,30 @@
+# Build outputs
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+*.userosscache
+*.sln.docstates
+
+# NuGet
+*.nupkg
+*.snupkg
+project.nuget.cache
+packages/
+.nuget/
+
+# Rider / JetBrains
+.idea/
+*.DotSettings.user
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# VS Code (keep .vscode/settings.json if you want, but ignore extensions/launch)
+.vscode/
