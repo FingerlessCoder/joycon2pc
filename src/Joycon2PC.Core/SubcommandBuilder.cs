@@ -177,5 +177,28 @@ namespace Joycon2PC.Core
             // bytes 9-15 = 0x00 (already zero-initialised)
             return cmd;
         }
+
+        /// <summary>
+        /// Build an NS2 set-input-report-mode command.
+        /// <paramref name="mode"/> 0x3F = simple HID (continuous full-rate reports),
+        /// 0x30 = standard full mode (default firmware mode, change-triggered).
+        /// Sending 0x3F switches the Joy-Con 2 to continuous streaming, which eliminates
+        /// perceived joystick lag and enables drawing smooth circles.
+        /// Returns a 16-byte output report.
+        /// </summary>
+        public static byte[] BuildNS2SetInputMode(byte mode = 0x3F)
+        {
+            var cmd = new byte[16];
+            cmd[0] = 0x30;   // output report type
+            cmd[1] = 0x01;
+            cmd[2] = 0x00;
+            cmd[3] = 0x03;   // subcommand: SetInputReportMode
+            cmd[4] = 0x00;
+            cmd[5] = 0x01;   // data length = 1
+            cmd[6] = 0x00;
+            cmd[7] = 0x00;
+            cmd[8] = mode;   // 0x3F = full-rate / 0x30 = standard
+            return cmd;
+        }
     }
 }

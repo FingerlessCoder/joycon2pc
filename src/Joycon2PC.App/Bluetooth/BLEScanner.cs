@@ -44,6 +44,12 @@ namespace Joycon2PC.App.Bluetooth
     /// </summary>
     public event Action<string, byte[]>? RawReportReceived;
 
+    /// <summary>
+    /// Fired immediately when a device finishes GATT subscription — before ScanAsync() returns.
+    /// Parameters: (deviceId, deviceName). Subscribe to update UI status in real-time.
+    /// </summary>
+    public event Action<string, string>? DeviceConnected;
+
     /// <summary>Get the product ID for a connected device (0 if unknown).</summary>
     public ushort GetProductId(string deviceId)
         => _deviceProductIds.TryGetValue(deviceId, out var pid) ? pid : (ushort)0;
@@ -134,6 +140,13 @@ namespace Joycon2PC.App.Bluetooth
 
         try
         {
+            // Release any stale GATT session from a previous connection.
+            // Windows BLE often keeps the OS-level session alive after the controller
+            // goes out of range, so ConnectAsync() silently no-ops on the cached session.
+            // Disconnecting first forces a clean re-negotiation of all characteristics.
+            try { dev.Gatt.Disconnect(); } catch { }
+            await Task.Delay(80);
+
             await dev.Gatt.ConnectAsync();
             string deviceId = dev.Id;
             Console.WriteLine($"    GATT connected: {deviceId}");
@@ -264,7 +277,9 @@ namespace Joycon2PC.App.Bluetooth
                     }
                 }
             }
-
+            // Notify listeners immediately — before ScanAsync() finishes its 30-second window.
+            if (foundNS2)
+                DeviceConnected?.Invoke(deviceId, name);
             if (!foundNS2)
             {
                 Console.WriteLine("    âš  NS2 service not found â€” falling back to all characteristics");

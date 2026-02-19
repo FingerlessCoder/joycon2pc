@@ -107,35 +107,63 @@ namespace Joycon2PC.App
             Controls.Add(pnlLeft);
             pnlLeft.Controls.Add(MakeLabel("Controller Inputs", 9, new Point(8, 6), bold: true, color: ACCENT));
 
-            // Stick visualisers
-            _pnlLStick = MakeStickPanel(new Point(20, 30));
-            _pnlRStick = MakeStickPanel(new Point(130, 30));
+            // ── Joy-Con 2 physical layout — L half | R half ──────────────
+            // Vertical divider between the two halves
+            pnlLeft.Controls.Add(new Panel
+            {
+                BackColor = Color.FromArgb(55, 55, 75),
+                Bounds    = new Rectangle(193, 6, 1, 295),
+            });
+
+            // ══ L Joy-Con half (x: 0–192) ═══════════════════════════════
+            pnlLeft.Controls.Add(MakeLabel("← L Joy-Con", 7.5f, new Point(6, 5), bold: true, color: ACCENT));
+
+            // Shoulder row (top-to-bottom on physical controller): ZL · L
+            AddButtonIndicator(pnlLeft, "ZL",  new Point(6,  23), YELLOW);
+            AddButtonIndicator(pnlLeft, "L",   new Point(30, 23));
+
+            // Menu row: − (Minus) · LS (stick click)
+            AddButtonIndicator(pnlLeft, "-",   new Point(6,  47));
+            AddButtonIndicator(pnlLeft, "LS",  new Point(30, 47), Color.FromArgb(120, 180, 255));
+
+            // Left stick visualiser
+            _pnlLStick = MakeStickPanel(new Point(14, 70));
             pnlLeft.Controls.Add(_pnlLStick);
+            pnlLeft.Controls.Add(MakeLabel("L Stick", 7, new Point(26, 154), color: TXT_DIM));
+
+            // D-pad cross
+            AddButtonIndicator(pnlLeft, "Up", new Point(50, 174));
+            AddButtonIndicator(pnlLeft, "Lt", new Point(28, 196));
+            AddButtonIndicator(pnlLeft, "Dn", new Point(50, 218));
+            AddButtonIndicator(pnlLeft, "Rt", new Point(72, 196));
+
+            // ══ R Joy-Con half (x: 196–388) ══════════════════════════════
+            const int rx = 196;
+            pnlLeft.Controls.Add(MakeLabel("R Joy-Con →", 7.5f, new Point(rx + 4, 5), bold: true, color: ACCENT));
+
+            // Shoulder row: ZR · C (new JC2 button) · R
+            AddButtonIndicator(pnlLeft, "ZR", new Point(rx + 4,  23), YELLOW);
+            AddButtonIndicator(pnlLeft, "C",  new Point(rx + 28, 23), Color.FromArgb(255, 160, 30));
+            AddButtonIndicator(pnlLeft, "R",  new Point(rx + 52, 23));
+
+            // Menu row: + (Plus) · Home · Cap (screenshot)
+            AddButtonIndicator(pnlLeft, "+",    new Point(rx + 4,  47));
+            AddButtonIndicator(pnlLeft, "Home", new Point(rx + 28, 47), ACCENT);
+            AddButtonIndicator(pnlLeft, "Cap",  new Point(rx + 52, 47), Color.FromArgb(180, 100, 220));
+
+            // Right stick visualiser
+            _pnlRStick = MakeStickPanel(new Point(rx + 4, 70));
             pnlLeft.Controls.Add(_pnlRStick);
-            pnlLeft.Controls.Add(MakeLabel("L Stick", 8, new Point(32, 120), color: TXT_DIM));
-            pnlLeft.Controls.Add(MakeLabel("R Stick", 8, new Point(140, 120), color: TXT_DIM));
+            pnlLeft.Controls.Add(MakeLabel("R Stick", 7, new Point(rx + 16, 154), color: TXT_DIM));
 
-            // Button grid
-            int bx = 248, by = 28;
-            AddButtonIndicator(pnlLeft, "A",    new Point(bx + 44, by + 22));
-            AddButtonIndicator(pnlLeft, "B",    new Point(bx + 22, by + 44));
-            AddButtonIndicator(pnlLeft, "X",    new Point(bx + 22, by));
-            AddButtonIndicator(pnlLeft, "Y",    new Point(bx,      by + 22));
-            AddButtonIndicator(pnlLeft, "ZR",   new Point(bx + 60, by + 70), YELLOW);
-            AddButtonIndicator(pnlLeft, "ZL",   new Point(bx,      by + 70), YELLOW);
-            AddButtonIndicator(pnlLeft, "R",    new Point(bx + 60, by + 92));
-            AddButtonIndicator(pnlLeft, "L",    new Point(bx,      by + 92));
-            AddButtonIndicator(pnlLeft, "+",    new Point(bx + 44, by + 116));
-            AddButtonIndicator(pnlLeft, "-",    new Point(bx,      by + 116));
-            AddButtonIndicator(pnlLeft, "Home", new Point(bx + 22, by + 138), ACCENT);
-            AddButtonIndicator(pnlLeft, "Cap",  new Point(bx + 46, by + 138), Color.FromArgb(180, 100, 220));
-            AddButtonIndicator(pnlLeft, "C",    new Point(bx + 70, by + 138), Color.FromArgb(255, 160, 30));  // Joy-Con 2 new C button
+            // RS (stick click)
+            AddButtonIndicator(pnlLeft, "RS",  new Point(rx + 52, 154), Color.FromArgb(120, 180, 255));
 
-            // D-Pad
-            AddButtonIndicator(pnlLeft, "Up",    new Point(bx + 22, by + 162));
-            AddButtonIndicator(pnlLeft, "Dn",    new Point(bx + 22, by + 186));
-            AddButtonIndicator(pnlLeft, "Lt",    new Point(bx,      by + 174));
-            AddButtonIndicator(pnlLeft, "Rt",    new Point(bx + 44, by + 174));
+            // ABXY face buttons (diamond): X=top, Y=left, A=right, B=bottom
+            AddButtonIndicator(pnlLeft, "X", new Point(rx + 136, 174));
+            AddButtonIndicator(pnlLeft, "Y", new Point(rx + 112, 196));
+            AddButtonIndicator(pnlLeft, "A", new Point(rx + 160, 196));
+            AddButtonIndicator(pnlLeft, "B", new Point(rx + 136, 218));
 
             // ── log panel (right half) ────────────────────────────────────
             _log = new RichTextBox
@@ -578,16 +606,35 @@ namespace Joycon2PC.App
                     {
                         bool mergedChanged = lastMerged == null
                             || merged.Buttons    != lastMerged.Buttons
-                            || Math.Abs(merged.LeftStickX  - lastMerged.LeftStickX)  > 30
-                            || Math.Abs(merged.LeftStickY  - lastMerged.LeftStickY)  > 30
-                            || Math.Abs(merged.RightStickX - lastMerged.RightStickX) > 30
-                            || Math.Abs(merged.RightStickY - lastMerged.RightStickY) > 30;
+                            || Math.Abs(merged.LeftStickX  - lastMerged.LeftStickX)  > 5
+                            || Math.Abs(merged.LeftStickY  - lastMerged.LeftStickY)  > 5
+                            || Math.Abs(merged.RightStickX - lastMerged.RightStickX) > 5
+                            || Math.Abs(merged.RightStickY - lastMerged.RightStickY) > 5;
                         if (mergedChanged)
                         {
                             lastMerged = merged;
                             try { BeginInvoke(() => UpdateInputDisplay(merged)); } catch { }
                         }
                     }
+                };
+
+                // ── Immediate status update when a device connects ────────
+                // DeviceConnected fires during ScanAsync (not after), so the UI
+                // shows "Connected" the moment GATT subscription succeeds — no
+                // need to wait for the full 30-second scan window to close.
+                scanner.DeviceConnected += (deviceId, devName) =>
+                {
+                    try
+                    {
+                        BeginInvoke(() =>
+                        {
+                            string shortName = devName.Length > 0 ? devName : deviceId[..Math.Min(12, deviceId.Length)];
+                            _lblJoyconStatus.Text      = $"Connected: {shortName}";
+                            _lblJoyconStatus.ForeColor = GREEN;
+                            Log($"✔ Connected: {shortName}", GREEN);
+                        });
+                    }
+                    catch { }
                 };
 
                 // ── Scan ─────────────────────────────────────────────────
@@ -659,10 +706,27 @@ namespace Joycon2PC.App
                     }
                 }
 
+                // ── Post-connect init: switch to continuous full-rate reporting ─
+                // Sending SetInputMode 0x3F puts the Joy-Con 2 into simple-HID mode,
+                // streaming reports at full BLE rate instead of change-only. This
+                // eliminates stick lag and also helps the player LED settle to solid.
+                try { await Task.Delay(250, ct); } catch { break; }
+                foreach (var id in sortedIds)
+                {
+                    try
+                    {
+                        var modeCmd = Joycon2PC.Core.SubcommandBuilder.BuildNS2SetInputMode(0x3F);
+                        await scanner.SendSubcommandAsync(id, modeCmd);
+                        await Task.Delay(60);
+                    }
+                    catch { /* non-fatal — controller still works in default mode */ }
+                }
+                Invoke(() => Log("  Input mode → 0x3F (continuous full-rate)", ACCENT));
+
                 // ── Wait: stay here until all devices disconnect or user stops ─
                 while (!ct.IsCancellationRequested && scanner.GetKnownDeviceIds().Length > 0)
                 {
-                    try { await Task.Delay(500, ct); } catch { break; }
+                    try { await Task.Delay(250, ct); } catch { break; }
                 }
 
                 if (ct.IsCancellationRequested) break;
@@ -784,15 +848,42 @@ namespace Joycon2PC.App
 
             if (_deviceStates.Count == 0) return merged;
 
-            // Buttons — OR all devices
-            foreach (var s in _deviceStates.Values)
-                merged.Buttons |= s.Buttons;
-
+            // ── Dual / single device detection ────────────────────────────
             bool isSingleDevice = _leftDeviceId != null
                                 && _leftDeviceId == _rightDeviceId;
             bool dualMode = !isSingleDevice
                           && _leftDeviceId != null
                           && _rightDeviceId != null;
+
+            // ── Buttons — side-masked OR in dual mode ───────────────────
+            // L Joy-Con owns: ZL/L/D-pad/Minus/LStick/Capture/GripLeft/LSL/LSR
+            // R Joy-Con owns: ZR/R/C/ABXY/Plus/Home/RStick/GripRight/RSL/RSR
+            // Masking prevents start-up ghost presses on one side from contaminating
+            // the other (e.g. R Joy-Con briefly asserts L+ZL during its BLE init burst,
+            // which without masking would forward phantom button presses to ViGEm and
+            // trigger the Windows alert SFX / unwanted in-game actions).
+            const uint L_MASK = (uint)(
+                SW2Button.ZL | SW2Button.L  | SW2Button.LSL | SW2Button.LSR |
+                SW2Button.Minus | SW2Button.LStick | SW2Button.Capture | SW2Button.GripLeft |
+                SW2Button.Down  | SW2Button.Up | SW2Button.Right | SW2Button.Left);
+            const uint R_MASK = (uint)(
+                SW2Button.ZR | SW2Button.R   | SW2Button.RSL | SW2Button.RSR |
+                SW2Button.Plus | SW2Button.Home | SW2Button.C | SW2Button.RStick | SW2Button.GripRight |
+                SW2Button.Y  | SW2Button.X   | SW2Button.B  | SW2Button.A);
+
+            if (dualMode)
+            {
+                // Each side only contributes buttons it physically owns.
+                uint lB = _deviceStates.TryGetValue(_leftDeviceId!,  out var lsBtn) ? lsBtn.Buttons & L_MASK : 0u;
+                uint rB = _deviceStates.TryGetValue(_rightDeviceId!, out var rsBtn) ? rsBtn.Buttons & R_MASK : 0u;
+                merged.Buttons = lB | rB;
+            }
+            else
+            {
+                // Single controller or IDs not yet assigned — OR all buttons as-is.
+                foreach (var s in _deviceStates.Values)
+                    merged.Buttons |= s.Buttons;
+            }
 
             if (isSingleDevice)
             {
@@ -899,6 +990,8 @@ namespace Joycon2PC.App
             SetBtn("Home", state.IsPressed(SW2Button.Home));
             SetBtn("Cap",  state.IsPressed(SW2Button.Capture));
             SetBtn("C",    state.IsPressed(SW2Button.C));
+            SetBtn("LS",   state.IsPressed(SW2Button.LStick));
+            SetBtn("RS",   state.IsPressed(SW2Button.RStick));
             SetBtn("Up",   state.IsPressed(SW2Button.Up));
             SetBtn("Dn",   state.IsPressed(SW2Button.Down));
             SetBtn("Lt",   state.IsPressed(SW2Button.Left));
