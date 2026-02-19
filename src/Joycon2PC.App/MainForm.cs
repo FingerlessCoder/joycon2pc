@@ -443,6 +443,14 @@ namespace Joycon2PC.App
                 var lastRawBytes        = new Dictionary<string, byte[]>(); // for byte-diff logger
                 JoyconState?            lastMerged = null;
 
+                // Warmup gate: Joy-Con 2 controllers send a burst of garbage button data
+                // (L+ZL bits asserted) during their BLE init sequence (~200-400 ms).
+                // We suppress all button output for the first WARMUP_REPORTS reports per
+                // device. Stick data and sentinel detection are unaffected — they read
+                // from raw bytes, not from state.Buttons.
+                const int WARMUP_REPORTS = 30;
+                var warmupReports = new Dictionary<string, int>();
+
                 scanner.RawReportReceived += (deviceId, data) =>
                 {
                     string shortId = deviceId.Length > 8 ? deviceId[..8] : deviceId;
@@ -533,6 +541,12 @@ namespace Joycon2PC.App
                             stickLoggedDevices.Add(deviceId);  // never fire again for this device
                         }
                     }
+
+                    // ── Warmup gate: suppress buttons until controller has settled ──
+                    warmupReports.TryGetValue(deviceId, out int wc);
+                    warmupReports[deviceId] = wc + 1;
+                    if (wc < WARMUP_REPORTS)
+                        state.Buttons = 0;  // discard init-burst garbage
 
                     _deviceStates[deviceId] = state;
 
@@ -707,10 +721,10 @@ namespace Joycon2PC.App
                 }
 
                 // ── Post-connect init: switch to continuous full-rate reporting ─
-                // Sending SetInputMode 0x3F puts the Joy-Con 2 into simple-HID mode,
-                // streaming reports at full BLE rate instead of change-only. This
-                // eliminates stick lag and also helps the player LED settle to solid.
-                try { await Task.Delay(250, ct); } catch { break; }
+                // Wait longer so the controller finishes its BLE init handshake.
+                // The LED blink stops once the controller accepts the mode command;
+                // sending it too early (< 400 ms after GATT subscribe) is ignored.
+                try { await Task.Delay(500, ct); } catch { break; }
                 foreach (var id in sortedIds)
                 {
                     try
