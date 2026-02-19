@@ -2,13 +2,10 @@
 	"folders": [
 		{
 			"path": "."
+		},
+		{
+			"path": "../Switch2-Controllers-main"
 		}
 	],
-	"settings": {
-		"chat.tools.terminal.autoApprove": {
-			"dotnet build": true,
-			"git add": true,
-			"git commit": true
-		}
-	}
+	"settings": {}
 }

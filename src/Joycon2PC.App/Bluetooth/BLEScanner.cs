@@ -384,6 +384,10 @@ namespace Joycon2PC.App.Bluetooth
     /// </summary>
     public async Task SendRumbleAsync(byte large, byte small)
     {
+        // Skip zero-rumble OS polls — they produce 0x50 packets that confuse the controller
+        // and cause ghost inputs (R-stick drift, phantom L/ZL presses).
+        if (large == 0 && small == 0) return;
+
         // Convert 0-255 XInput motor power to 0.0-1.0 amplitude
         float amp = Math.Max(large, small) / 255f;
         var payload = Joycon2PC.Core.SubcommandBuilder.BuildNS2Rumble(amp > 0.01f);

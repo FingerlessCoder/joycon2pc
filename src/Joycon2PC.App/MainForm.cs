@@ -39,12 +39,10 @@ namespace Joycon2PC.App
         private Label  _lblVigemStatus  = null!;
         private Label  _lblJoyconStatus = null!;
         private Button _btnStart        = null!;
-        private Button _btnSimulate     = null!;
         private Button _btnReconnect    = null!;
         private RichTextBox _log        = null!;
         private Panel  _pnlLStick       = null!;
         private Panel  _pnlRStick       = null!;
-        private Label  _lblMode         = null!;
 
         // Button indicator labels keyed by name
         private Dictionary<string, Panel> _btnIndicators = new();
@@ -73,10 +71,6 @@ namespace Joycon2PC.App
             var lblTitle = MakeLabel("🎮  Joycon2PC", 16, new Point(16, 12), bold: true, color: ACCENT);
             lblTitle.AutoSize = true;
             Controls.Add(lblTitle);
-
-            _lblMode = MakeLabel("[ SIMULATION MODE ]", 8, new Point(170, 18), color: YELLOW);
-            _lblMode.AutoSize = true;
-            Controls.Add(_lblMode);
 
             // ── status row ────────────────────────────────────────────────
             var statusPanel = new Panel
@@ -164,7 +158,7 @@ namespace Joycon2PC.App
             // ── action buttons ────────────────────────────────────────────
             _btnStart = new Button
             {
-                Text      = "▶  Start (Simulation)",
+                Text      = "▶  Start (Scan for Joy-Con)",
                 BackColor = Color.FromArgb(50, 120, 80),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -176,21 +170,6 @@ namespace Joycon2PC.App
             _btnStart.FlatAppearance.BorderSize = 0;
             _btnStart.Click += OnStartClicked;
             Controls.Add(_btnStart);
-
-            _btnSimulate = new Button
-            {
-                Text      = "🔧  Toggle Mode",
-                BackColor = Color.FromArgb(60, 60, 80),
-                ForeColor = TXT,
-                FlatStyle = FlatStyle.Flat,
-                Font      = FONT_MD,
-                Bounds    = new Rectangle(265, 430, 140, 48),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Left,
-                Cursor    = Cursors.Hand,
-            };
-            _btnSimulate.FlatAppearance.BorderSize = 0;
-            _btnSimulate.Click += OnToggleModeClicked;
-            Controls.Add(_btnSimulate);
 
             _btnReconnect = new Button
             {
@@ -222,17 +201,10 @@ namespace Joycon2PC.App
             helpBox.Text =
                 "QUICK START — HOW TO USE\r\n" +
                 "────────────────────────────────────────────\r\n" +
-                "[ SIMULATION MODE ]  (no hardware needed)\r\n" +
-                "  • Just press ▶ Start.  The virtual controller will appear in Windows as an Xbox 360 gamepad.\r\n" +
-                "  • You can test it in Steam, game controllers in Control Panel, or any XInput game right now.\r\n" +
-                "  • Button indicators above will light up and the sticks will animate.\r\n\r\n" +
-
-                "[ REAL JOY-CON MODE ]  (when you have hardware)\r\n" +
                 "  Step 1 — Install ViGEmBus driver:  https://github.com/nefarius/ViGEmBus/releases  (run the installer)\r\n" +
                 "  Step 2 — Pair your Joy-Con: Windows Settings → Bluetooth → Add device → choose your Joy-Con 2\r\n" +
-                "  Step 3 — Build with INTHEHAND support: add InTheHand.BluetoothLE NuGet package when you have data, rebuild\r\n" +
-                "  Step 4 — Press ▶ Start — the app will scan, connect, and map inputs to a virtual Xbox controller.\r\n\r\n" +
-                "NOTE: ViGEmBus must be installed for the virtual controller to work, even in simulation mode.";
+                "  Step 3 — Press ▶ Start — the app will scan, connect, and map inputs to a virtual Xbox controller.\r\n\r\n" +
+                "NOTE: ViGEmBus must be installed for the virtual controller to work.";
             Controls.Add(helpBox);
 
             // kick off ViGEm check
@@ -318,7 +290,7 @@ namespace Joycon2PC.App
                     _lblVigemStatus.ForeColor = RED;
                     Log("ViGEmBus driver not found! Install it from:", RED);
                     Log("  https://github.com/nefarius/ViGEmBus/releases", ACCENT);
-                    Log("Virtual controller simulation will still run but no gamepad will appear in Windows.", YELLOW);
+                    Log("Virtual controller will not appear in Windows without ViGEmBus.", YELLOW);
                 });
             }
         }
@@ -326,15 +298,6 @@ namespace Joycon2PC.App
         // ══════════════════════════════════════════════════════════════════
         //  BUTTON HANDLERS
         // ══════════════════════════════════════════════════════════════════
-        private bool _simulationMode = true;
-
-        private void OnToggleModeClicked(object? s, EventArgs e)
-        {
-            if (_running) return; // don't switch while running
-            _simulationMode = !_simulationMode;
-            UpdateModeUI();
-        }
-
         // Reconnect: force-clear stale BLE device state (Windows GattServerDisconnected
         // is unreliable and often never fires), then restart the scan loop immediately.
         private void OnReconnectClicked()
@@ -374,36 +337,6 @@ namespace Joycon2PC.App
             });
         }
 
-        private void UpdateModeUI()
-        {
-            if (_simulationMode)
-            {
-                _lblMode.Text      = "[ SIMULATION MODE ]";
-                _lblMode.ForeColor = YELLOW;
-                _btnStart.Text     = "▶  Start (Simulation)";
-                _btnStart.BackColor= Color.FromArgb(50, 120, 80);
-                Log("Switched to SIMULATION MODE — no Joy-Con needed.", YELLOW);
-            }
-            else
-            {
-#if INTHEHAND
-                _lblMode.Text      = "[ REAL JOY-CON MODE ]";
-                _lblMode.ForeColor = GREEN;
-                _btnStart.Text     = "▶  Start (Scan for Joy-Con)";
-                _btnStart.BackColor= Color.FromArgb(40, 80, 150);
-                Log("Switched to REAL JOY-CON MODE — will scan for paired Joy-Con.", GREEN);
-#else
-                // INTHEHAND not compiled in — can't use real mode
-                _simulationMode = true;
-                MessageBox.Show(
-                    "Real Joy-Con mode requires the InTheHand.BluetoothLE NuGet package.\n\n" +
-                    "Since you're saving data right now, stay in Simulation Mode.\n" +
-                    "When you have data, add the package and rebuild with the INTHEHAND symbol.",
-                    "Package Not Available", MessageBoxButtons.OK, MessageBoxIcon.Information);
-#endif
-            }
-        }
-
         private void OnStartClicked(object? s, EventArgs e)
         {
             if (_running)
@@ -428,100 +361,24 @@ namespace Joycon2PC.App
             _parser               = new JoyconParser();
             _parser.StateChanged += OnStateChanged;
 
-            if (_simulationMode)
-            {
-                Log("Starting simulation...", ACCENT);
-                _ = RunSimulationAsync(_cts.Token);
-            }
-            else
-            {
 #if INTHEHAND
-                Log("Searching for Joy-Con over Bluetooth LE...", ACCENT);
-                _lblJoyconStatus.Text      = "Scanning...";
-                _lblJoyconStatus.ForeColor = YELLOW;
-                _ = RunRealAsync(_cts.Token);
+            Log("Searching for Joy-Con over Bluetooth LE...", ACCENT);
+            _lblJoyconStatus.Text      = "Scanning...";
+            _lblJoyconStatus.ForeColor = YELLOW;
+            _ = RunRealAsync(_cts.Token);
 #endif
-            }
         }
 
         private void StopAll()
         {
             _cts?.Cancel();
             _running = false;
-            _btnStart.Text      = _simulationMode ? "▶  Start (Simulation)" : "▶  Start (Scan for Joy-Con)";
+            _btnStart.Text      = "▶  Start (Scan for Joy-Con)";
             _btnStart.BackColor = Color.FromArgb(50, 120, 80);
             _btnReconnect.BackColor = Color.FromArgb(80, 60, 20);
             _lblJoyconStatus.Text      = "Stopped";
             _lblJoyconStatus.ForeColor = TXT_DIM;
             Log("Stopped.", TXT_DIM);
-        }
-
-        // ══════════════════════════════════════════════════════════════════
-        //  SIMULATION LOOP
-        // ══════════════════════════════════════════════════════════════════
-        private async Task RunSimulationAsync(CancellationToken ct)
-        {
-            Log("Simulation running — watch the buttons and sticks animate.", GREEN);
-            Invoke(() =>
-            {
-                _lblJoyconStatus.Text      = "Simulating...";
-                _lblJoyconStatus.ForeColor = YELLOW;
-            });
-
-            int tick = 0;
-            while (!ct.IsCancellationRequested)
-            {
-                // Animate sticks with a circle around NS2 centre (1998)
-                int lxFull = 1998 + (int)(900 * Math.Sin(tick * 0.04));
-                int lyFull = 1998 + (int)(900 * Math.Cos(tick * 0.04));
-                lxFull = Math.Clamp(lxFull, 0, 4095);
-                lyFull = Math.Clamp(lyFull, 0, 4095);
-
-                // Pack LX/LY into bytes 10-12 (NS2 12-bit format)
-                byte s10 = (byte)(lxFull & 0xFF);
-                byte s11 = (byte)(((lxFull >> 8) & 0x0F) | ((lyFull & 0x0F) << 4));
-                byte s12 = (byte)((lyFull >> 4) & 0xFF);
-
-                // Cycle through NS2 buttons to demo them all (32-bit word at bytes 4-7)
-                uint buttons = 0;
-                int phase = tick % 200;
-                if (phase < 20)  buttons = (uint)SW2Button.A;
-                else if (phase < 40)  buttons = (uint)SW2Button.B;
-                else if (phase < 60)  buttons = (uint)SW2Button.X;
-                else if (phase < 80)  buttons = (uint)SW2Button.Y;
-                else if (phase < 100) buttons = (uint)SW2Button.R;
-                else if (phase < 120) buttons = (uint)SW2Button.ZR;
-                else if (phase < 130) buttons = (uint)SW2Button.Plus;
-                else if (phase < 140) buttons = (uint)SW2Button.Minus;
-                else if (phase < 150) buttons = (uint)SW2Button.Home;
-                else if (phase < 160) buttons = (uint)SW2Button.L;
-                else if (phase < 170) buttons = (uint)SW2Button.ZL;
-                else if (phase < 180) buttons = (uint)SW2Button.Up;
-                else if (phase < 190) buttons = (uint)SW2Button.C;
-
-                // Build a minimal NS2-style report (16+ bytes)
-                var report = new byte[16];
-                report[0] = 0x30;                              // report id
-                report[1] = (byte)(tick & 0xFF);              // timer
-                // bytes 4-7: buttons (32-bit LE)
-                report[4] = (byte)(buttons & 0xFF);
-                report[5] = (byte)((buttons >> 8) & 0xFF);
-                report[6] = (byte)((buttons >> 16) & 0xFF);
-                report[7] = (byte)((buttons >> 24) & 0xFF);
-                // bytes 10-12: left stick
-                report[10] = s10;
-                report[11] = s11;
-                report[12] = s12;
-                // bytes 13-15: right stick at centre
-                report[13] = (byte)(1998 & 0xFF);
-                report[14] = (byte)(((1998 >> 8) & 0x0F) | ((1998 & 0x0F) << 4));
-                report[15] = (byte)((1998 >> 4) & 0xFF);
-
-                _parser.Parse(report);
-                tick++;
-
-                try { await Task.Delay(16, ct); } catch { break; }
-            }
         }
 
 #if INTHEHAND
