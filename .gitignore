@@ -31,3 +31,6 @@ desktop.ini
 # VS Code (keep .vscode/settings.json if you want, but ignore extensions/launch)
 .vscode/
 
+# Ignore VS Code workspace file
+joycon2.code-workspace
+
