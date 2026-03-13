@@ -7,7 +7,8 @@
 
 ## Build And Run
 - Prerequisites:
-  - Windows 11 22H2+
+  - Windows 11 22H2+ (recommended and validated target for BLE runtime)
+  - Windows 10 22H2 can build, but BLE behavior is not guaranteed
   - ViGEmBus installed
   - .NET 9 SDK/runtime available
 - Restore/build solution:
