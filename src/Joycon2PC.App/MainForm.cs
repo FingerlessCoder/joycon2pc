@@ -50,8 +50,8 @@ namespace Joycon2PC.App
         private Button _btnStart        = null!;
         private Button _btnReconnect    = null!;
         private RichTextBox _log        = null!;
-        private Panel  _pnlLStick       = null!;
-        private Panel  _pnlRStick       = null!;
+
+        private JoyConVisualizerPanel _joyconViz = null!;
 
         // Button indicator labels keyed by name
         private Dictionary<string, Panel> _btnIndicators = new();
@@ -142,79 +142,14 @@ namespace Joycon2PC.App
             contentGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             Controls.Add(contentGrid);
 
-            // ── button panel (left column) ────────────────────────────────
-            var pnlLeft = new Panel
+            // ── Joy-Con 2 drawn visualizer ──────────────────────────────────
+            _joyconViz = new JoyConVisualizerPanel
             {
-                BackColor = PANEL,
-                Dock = DockStyle.Fill,
-                BorderStyle = BorderStyle.FixedSingle,
-                Margin = new Padding(0, 0, 10, 0),
+                BackColor   = PANEL,
+                Dock        = DockStyle.Fill,
+                MinimumSize = new Size(432, 380),
             };
-            contentGrid.Controls.Add(pnlLeft, 0, 0);
-
-            pnlLeft.Controls.Add(MakeLabel("Controller Inputs", 10, new Point(10, 8), bold: true, color: ACCENT));
-
-            // ── Joy-Con 2 physical layout ─────────────────────────────────
-            // Vertical divider
-            pnlLeft.Controls.Add(new Panel
-            {
-                BackColor = Color.FromArgb(70, 70, 70),
-                Bounds    = new Rectangle(213, 2, 1, 330),
-            });
-
-            // ══ L Joy-Con 2  (ZL/L top · stick upper · cap · d-pad lower) ══
-            // Layout mirrors physical front face (top→bottom: shoulders, −, stick+LS+Cap, d-pad)
-            pnlLeft.Controls.Add(MakeLabel("L Joy-Con 2", 8, new Point(10, 6), bold: true, color: ACCENT));
-
-            // Top: shoulder buttons ZL · L
-            AddButtonIndicator(pnlLeft, "ZL", new Point(10, 28), YELLOW);
-            AddButtonIndicator(pnlLeft, "L",  new Point(34, 28));
-            // − (Minus) at top-right, opposite corner from shoulders
-            AddButtonIndicator(pnlLeft, "-",  new Point(144, 28));
-
-            // Upper-centre: Left stick
-            _pnlLStick = MakeStickPanel(new Point(10, 56));
-            pnlLeft.Controls.Add(_pnlLStick);
-            pnlLeft.Controls.Add(MakeLabel("L Stick", 7, new Point(26, 144), color: TXT_DIM));
-            // LS (stick click) and Cap sit to the right of the stick
-            AddButtonIndicator(pnlLeft, "LS",  new Point(104, 56),  Color.FromArgb(80, 150, 220));
-            AddButtonIndicator(pnlLeft, "Cap", new Point(104, 80),  Color.FromArgb(160, 110, 210));
-
-            // Lower: D-pad cross
-            AddButtonIndicator(pnlLeft, "Up", new Point(66, 174));
-            AddButtonIndicator(pnlLeft, "Lt", new Point(42, 196));
-            AddButtonIndicator(pnlLeft, "Rt", new Point(90, 196));
-            AddButtonIndicator(pnlLeft, "Dn", new Point(66, 218));
-
-            // ══ R Joy-Con 2  (ZR/R top · ABXY upper-right · +/Home · stick lower · C bottom) ══
-            // Layout mirrors physical front face
-            const int rx = 216;
-            pnlLeft.Controls.Add(MakeLabel("R Joy-Con 2", 8, new Point(rx + 8, 6), bold: true, color: ACCENT));
-
-            // Top: shoulder buttons ZR · R
-            AddButtonIndicator(pnlLeft, "ZR", new Point(rx + 8,  28), YELLOW);
-            AddButtonIndicator(pnlLeft, "R",  new Point(rx + 32, 28));
-            // + (Plus) and face-button X share the top row (upper-right area)
-            AddButtonIndicator(pnlLeft, "+",  new Point(rx + 90,  28));
-            AddButtonIndicator(pnlLeft, "X",  new Point(rx + 134, 28));
-
-            // Second row: Home + ABXY sides
-            AddButtonIndicator(pnlLeft, "Home", new Point(rx + 90,  52), ACCENT);
-            AddButtonIndicator(pnlLeft, "Y",    new Point(rx + 110, 52));
-            AddButtonIndicator(pnlLeft, "A",    new Point(rx + 158, 52), Color.FromArgb(200, 60, 60));
-
-            // Third row: face B
-            AddButtonIndicator(pnlLeft, "B",    new Point(rx + 134, 76), Color.FromArgb(200, 160, 40));
-
-            // Lower-centre: Right stick  (below ABXY just like physical layout)
-            _pnlRStick = MakeStickPanel(new Point(rx + 8, 104));
-            pnlLeft.Controls.Add(_pnlRStick);
-            pnlLeft.Controls.Add(MakeLabel("R Stick", 7, new Point(rx + 24, 192), color: TXT_DIM));
-            // RS and Screenshot (Cap) sit to the right of the stick
-            AddButtonIndicator(pnlLeft, "RS", new Point(rx + 98, 104), Color.FromArgb(80, 150, 220));
-
-            // Bottom: C button (new Joy-Con 2 button, physically at the bottom of R face)
-            AddButtonIndicator(pnlLeft, "C",  new Point(rx + 98, 128), Color.FromArgb(220, 135, 40));
+            contentGrid.Controls.Add(_joyconViz, 0, 0);
 
             // ── log panel (right column) ──────────────────────────────────
             var logCard = new Panel
@@ -1171,8 +1106,7 @@ namespace Joycon2PC.App
         private void UpdateInputDisplay(JoyconState state)
         {
             // ── Stick visualisers ──────────────────────────────────────────
-            DrawStick(_pnlLStick, state.LeftStickX,  state.LeftStickY);
-            DrawStick(_pnlRStick, state.RightStickX, state.RightStickY);
+            _joyconViz?.SetSticks(state.LeftStickX, state.LeftStickY, state.RightStickX, state.RightStickY);
 
             // ── Button indicators ──────────────────────────────────────────
             SetBtn("A",    state.IsPressed(SW2Button.A));
@@ -1197,13 +1131,7 @@ namespace Joycon2PC.App
         }
 
         private void SetBtn(string name, bool pressed)
-        {
-            if (!_btnIndicators.TryGetValue(name, out var p)) return;
-            var onColor = (Color)(p.Tag ?? GREEN);
-            p.BackColor = pressed ? onColor : INACTIVE_BTN;
-            if (p.Controls.Count > 0)
-                ((Label)p.Controls[0]).ForeColor = pressed ? Color.White : TXT_DIM;
-        }
+            => _joyconViz?.SetButton(name, pressed);
 
         private void DrawStick(Panel panel, int rawX, int rawY)
         {
@@ -1276,6 +1204,266 @@ namespace Joycon2PC.App
             }
             _bridge?.Dispose();
             base.OnFormClosing(e);
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        //  JOY-CON 2 VISUALIZER  (custom-drawn GDI+ panel)
+        // ══════════════════════════════════════════════════════════════════
+        private sealed class JoyConVisualizerPanel : Panel
+        {
+            private readonly Dictionary<string, bool> _p = new();
+            private float _lx, _ly, _rx, _ry;
+
+            // accent colour when a button is pressed
+            private static readonly Dictionary<string, Color> _on = new()
+            {
+                ["ZL"] = Color.FromArgb(255, 185,   0),
+                ["L" ] = Color.FromArgb(255, 185,   0),
+                ["ZR"] = Color.FromArgb(255, 185,   0),
+                ["R" ] = Color.FromArgb(255, 185,   0),
+                ["-" ] = Color.FromArgb(200, 200, 210),
+                ["+" ] = Color.FromArgb(200, 200, 210),
+                ["LS"] = Color.FromArgb( 80, 160, 235),
+                ["RS"] = Color.FromArgb( 80, 160, 235),
+                ["A" ] = Color.FromArgb(214,  55,  48),
+                ["B" ] = Color.FromArgb(214, 153,  35),
+                ["X" ] = Color.FromArgb( 65, 148, 215),
+                ["Y" ] = Color.FromArgb( 75, 185,  75),
+                ["Home"] = Color.FromArgb(  0, 120, 212),
+                ["Cap" ] = Color.FromArgb(145,  85, 195),
+                ["C"  ] = Color.FromArgb(220, 130,  35),
+                ["Up"] = Color.White, ["Dn"] = Color.White,
+                ["Lt"] = Color.White, ["Rt"] = Color.White,
+            };
+
+            // drawing palette
+            private static readonly Color C_BODY   = Color.FromArgb( 42,  42,  46);
+            private static readonly Color C_BTN    = Color.FromArgb( 58,  58,  63);
+            private static readonly Color C_LABEL  = Color.FromArgb(165, 165, 175);
+            private static readonly Color C_SHLD   = Color.FromArgb( 50,  50,  56);
+            private static readonly Color C_TRIM_L = Color.FromArgb( 28, 145, 215);  // neon blue
+            private static readonly Color C_TRIM_R = Color.FromArgb(225,  78,  48);  // neon red
+            private static readonly Color C_CROSS  = Color.FromArgb( 50,  50,  56);
+
+            public JoyConVisualizerPanel()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.ResizeRedraw |
+                         ControlStyles.OptimizedDoubleBuffer |
+                         ControlStyles.AllPaintingInWmPaint, true);
+            }
+
+            public void SetButton(string name, bool pressed)
+            {
+                if (_p.TryGetValue(name, out var cur) && cur == pressed) return;
+                _p[name] = pressed;
+                Invalidate();
+            }
+
+            public void SetSticks(int rawLX, int rawLY, int rawRX, int rawRY)
+            {
+                const float C = 1998f, R = 1251f;
+                float lx = Math.Clamp((rawLX - C) / R, -1f, 1f);
+                float ly = Math.Clamp((rawLY - C) / R, -1f, 1f);
+                float rx = Math.Clamp((rawRX - C) / R, -1f, 1f);
+                float ry = Math.Clamp((rawRY - C) / R, -1f, 1f);
+                if (lx == _lx && ly == _ly && rx == _rx && ry == _ry) return;
+                _lx = lx; _ly = ly; _rx = rx; _ry = ry;
+                Invalidate();
+            }
+
+            private bool On(string b) => _p.TryGetValue(b, out var v) && v;
+            private Color Ac(string b) => _on.TryGetValue(b, out var c) ? c : Color.LightGray;
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var g = e.Graphics;
+                g.SmoothingMode   = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                g.Clear(BackColor);
+                DrawLJoyCon(g);
+                DrawRJoyCon(g);
+            }
+
+            // ── L Joy-Con 2 ──────────────────────────────────────────────────
+            //  Front face (top→bottom): ZL/L triggers, −, L-Stick, LED, D-pad, Cap
+            private void DrawLJoyCon(Graphics g)
+            {
+                const int bx = 8, by = 48, bw = 174, bh = 308;
+
+                // ZL trigger (above body)
+                FillRR(g, On("ZL") ? Ac("ZL") : C_SHLD, 10,  2, 92, 30, 8);
+                BtnLbl(g, "ZL", 10, 2, 92, 30, On("ZL"));
+                // L bumper (between trigger and body top)
+                FillRR(g, On("L") ? Ac("L") : C_SHLD, 10, 30, 92, 18, 4);
+                BtnLbl(g, "L",  10, 30, 92, 18, On("L"));
+
+                // Body
+                FillRR(g, C_BODY, bx, by, bw, bh, 26);
+                // Blue rail strip (right edge, neon blue)
+                g.FillRectangle(new SolidBrush(C_TRIM_L), bx + bw - 16, by + 22, 16, bh - 44);
+                // Body outline
+                DrawRR(g, new Pen(Color.FromArgb(68, 68, 76), 1.5f), bx, by, bw, bh, 26);
+
+                // − button (top-right of face)
+                CircBtn(g, 150, 75, 10, "-", On("-"));
+
+                // Left Stick (upper-center of face)
+                StickViz(g, 62, 120, 30, _lx, _ly, C_TRIM_L, On("LS"));
+                g.DrawString("LS", new Font("Segoe UI", 6.5f), new SolidBrush(C_LABEL), 94, 108);
+
+                // LED dots (4, cosmetic)
+                for (int i = 0; i < 4; i++)
+                    g.FillEllipse(new SolidBrush(Color.FromArgb(62, 62, 72)), 92 + i * 10, 158, 5, 5);
+
+                // D-pad
+                const int dpx = 76, dpy = 248;
+                // arms
+                DPadArm(g, dpx - 9, dpy - 28, 18, 20, "Up", On("Up"));
+                DPadArm(g, dpx - 9, dpy +  8, 18, 20, "Dn", On("Dn"));
+                DPadArm(g, dpx - 28, dpy - 9, 20, 18, "Lt", On("Lt"));
+                DPadArm(g, dpx +  8, dpy - 9, 20, 18, "Rt", On("Rt"));
+                // center connector
+                g.FillRectangle(new SolidBrush(C_CROSS), dpx - 9, dpy - 9, 18, 18);
+
+                // Screenshot / Capture button
+                SqBtn(g, 130, 236, 20, 20, "■", On("Cap"), Ac("Cap"));
+            }
+
+            // ── R Joy-Con 2 ──────────────────────────────────────────────────
+            //  Front face (top→bottom): ZR/R triggers, +, ABXY+Home (upper), R-Stick, C
+            private void DrawRJoyCon(Graphics g)
+            {
+                const int bx = 252, by = 48, bw = 174, bh = 308;
+
+                // ZR trigger
+                FillRR(g, On("ZR") ? Ac("ZR") : C_SHLD, 332,  2, 92, 30, 8);
+                BtnLbl(g, "ZR", 332, 2, 92, 30, On("ZR"));
+                // R bumper
+                FillRR(g, On("R") ? Ac("R") : C_SHLD, 332, 30, 92, 18, 4);
+                BtnLbl(g, "R",  332, 30, 92, 18, On("R"));
+
+                // Body
+                FillRR(g, C_BODY, bx, by, bw, bh, 26);
+                // Orange rail strip (left edge)
+                g.FillRectangle(new SolidBrush(C_TRIM_R), bx, by + 22, 16, bh - 44);
+                DrawRR(g, new Pen(Color.FromArgb(68, 68, 76), 1.5f), bx, by, bw, bh, 26);
+
+                // + button (upper-left of face)
+                CircBtn(g, 278, 75, 10, "+", On("+"));
+
+                // ABXY diamond (upper-right area)
+                //   X=top  Y=left  A=right  B=bottom   each r=13
+                CircBtn(g, 376,  84, 13, "X", On("X"));
+                CircBtn(g, 350, 110, 13, "Y", On("Y"));
+                CircBtn(g, 402, 110, 13, "A", On("A"));
+                CircBtn(g, 376, 136, 13, "B", On("B"));
+
+                // Home button (left of ABXY)
+                CircBtn(g, 302, 120, 12, "⌂", On("Home"));
+
+                // LED dots
+                for (int i = 0; i < 4; i++)
+                    g.FillEllipse(new SolidBrush(Color.FromArgb(62, 62, 72)), 260 + i * 10, 158, 5, 5);
+
+                // Right Stick (lower-center, below ABXY)
+                StickViz(g, 360, 218, 30, _rx, _ry, C_TRIM_R, On("RS"));
+                g.DrawString("RS", new Font("Segoe UI", 6.5f), new SolidBrush(C_LABEL), 392, 206);
+
+                // C button (new Joy-Con 2, bottom-center)
+                CircBtn(g, 348, 296, 15, "C", On("C"));
+            }
+
+            // ── drawing primitives ──────────────────────────────────────────
+            private void StickViz(Graphics g, int cx, int cy, int r,
+                                  float nx, float ny, Color rim, bool pressed)
+            {
+                g.FillEllipse(new SolidBrush(Color.FromArgb(28, 28, 32)),
+                    cx - r, cy - r, r * 2, r * 2);
+                g.DrawEllipse(new Pen(pressed ? Color.White : rim, pressed ? 2.5f : 1.8f),
+                    cx - r, cy - r, r * 2, r * 2);
+                // crosshair
+                g.DrawLine(new Pen(Color.FromArgb(52, 52, 60), 1), cx - r + 4, cy, cx + r - 4, cy);
+                g.DrawLine(new Pen(Color.FromArgb(52, 52, 60), 1), cx, cy - r + 4, cx, cy + r - 4);
+                // dot
+                const int dr = 7;
+                float dx = cx + nx * (r - dr - 3);
+                float dy = cy - ny * (r - dr - 3);
+                g.FillEllipse(new SolidBrush(rim), dx - dr, dy - dr, dr * 2, dr * 2);
+            }
+
+            private void CircBtn(Graphics g, int cx, int cy, int r, string label, bool pressed)
+            {
+                g.FillEllipse(new SolidBrush(pressed ? Ac(label) : C_BTN), cx-r, cy-r, r*2, r*2);
+                g.DrawEllipse(new Pen(Color.FromArgb(78, 78, 88), 1f), cx-r, cy-r, r*2, r*2);
+                using var f = new Font("Segoe UI", 6.5f, FontStyle.Bold);
+                var sz = g.MeasureString(label, f);
+                g.DrawString(label, f,
+                    new SolidBrush(pressed ? Color.White : C_LABEL),
+                    cx - sz.Width / 2, cy - sz.Height / 2);
+            }
+
+            private void DPadArm(Graphics g, int x, int y, int w, int h, string btn, bool pressed)
+            {
+                FillRR(g, pressed ? Color.White : C_BTN, x, y, w, h, 3);
+                string arrow = btn switch
+                {
+                    "Up" => "▲", "Dn" => "▼", "Lt" => "◄", _ => "►"
+                };
+                using var f = new Font("Segoe UI", 6f);
+                var sz = g.MeasureString(arrow, f);
+                g.DrawString(arrow, f,
+                    new SolidBrush(pressed ? Color.Black : C_LABEL),
+                    x + w / 2f - sz.Width / 2, y + h / 2f - sz.Height / 2);
+            }
+
+            private void SqBtn(Graphics g, int x, int y, int w, int h,
+                               string label, bool pressed, Color onColor)
+            {
+                FillRR(g, pressed ? onColor : C_BTN, x, y, w, h, 3);
+                g.DrawRectangle(new Pen(Color.FromArgb(78, 78, 88), 1f), x, y, w, h);
+                using var f = new Font("Segoe UI", 6.5f);
+                var sz = g.MeasureString(label, f);
+                g.DrawString(label, f,
+                    new SolidBrush(pressed ? Color.White : C_LABEL),
+                    x + w / 2f - sz.Width / 2, y + h / 2f - sz.Height / 2);
+            }
+
+            private static void BtnLbl(Graphics g, string text,
+                                       int x, int y, int w, int h, bool lit)
+            {
+                using var f = new Font("Segoe UI", 7.5f, FontStyle.Bold);
+                var sz = g.MeasureString(text, f);
+                g.DrawString(text, f,
+                    new SolidBrush(lit ? Color.White : C_LABEL),
+                    x + w / 2f - sz.Width / 2, y + h / 2f - sz.Height / 2);
+            }
+
+            private static void FillRR(Graphics g, Color c, int x, int y, int w, int h, int r)
+            {
+                using var path = RRPath(x, y, w, h, r);
+                g.FillPath(new SolidBrush(c), path);
+            }
+
+            private static void DrawRR(Graphics g, Pen pen, int x, int y, int w, int h, int r)
+            {
+                using var path = RRPath(x, y, w, h, r);
+                g.DrawPath(pen, path);
+            }
+
+            private static System.Drawing.Drawing2D.GraphicsPath RRPath(
+                int x, int y, int w, int h, int r)
+            {
+                var p = new System.Drawing.Drawing2D.GraphicsPath();
+                if (r <= 0) { p.AddRectangle(new Rectangle(x, y, w, h)); return p; }
+                int d = r * 2;
+                p.AddArc(x,         y,         d, d, 180, 90);
+                p.AddArc(x + w - d, y,         d, d, 270, 90);
+                p.AddArc(x + w - d, y + h - d, d, d,   0, 90);
+                p.AddArc(x,         y + h - d, d, d,  90, 90);
+                p.CloseFigure();
+                return p;
+            }
         }
     }
 }
