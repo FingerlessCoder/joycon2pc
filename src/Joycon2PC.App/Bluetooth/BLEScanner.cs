@@ -328,7 +328,7 @@ namespace Joycon2PC.App.Bluetooth
         });
     }
 
-    public async Task<bool> SendSubcommandAsync(string deviceId, byte[] payload, CancellationToken? ct = null)
+    public async Task<bool> SendSubcommandAsync(string deviceId, byte[] payload, CancellationToken ct = default)
     {
         if (!_writableCharacteristics.TryGetValue(deviceId, out var ch) || ch == null)
         {
@@ -338,8 +338,13 @@ namespace Joycon2PC.App.Bluetooth
 
         try
         {
+            ct.ThrowIfCancellationRequested();
             await ch.WriteValueWithoutResponseAsync(payload);
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

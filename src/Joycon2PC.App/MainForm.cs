@@ -721,9 +721,11 @@ namespace Joycon2PC.App
                 }
 
                 // ── Post-connect init: switch to continuous full-rate reporting ─
-                // Wait longer so the controller finishes its BLE init handshake.
-                // The LED blink stops once the controller accepts the mode command;
-                // sending it too early (< 400 ms after GATT subscribe) is ignored.
+                // We wait 300 ms (reduced from 500 ms) and rely on the retry logic in
+                // ConfigureContinuousInputModeAsync to bridge the ~400 ms threshold:
+                //   Attempt 1 @ ~300 ms  — likely ignored by controller (< 400 ms)
+                //   Attempt 2 @ ~420 ms  — lands above threshold, expected to succeed
+                // This saves ~80 ms of startup latency vs. the original 500 ms flat wait.
                 try { await Task.Delay(300, ct); } catch { break; }
                 await ConfigureContinuousInputModeAsync(scanner, sortedIds, ct);
 
@@ -835,7 +837,9 @@ namespace Joycon2PC.App
         {
             const byte mode = 0x3F;
             const int attempts = 3;
-            const int retryDelayMs = 80;
+            // 120 ms between retries: initial 300 ms wait + 120 ms = 420 ms for attempt 2,
+            // which reliably lands above the ~400 ms BLE init threshold for NS2 controllers.
+            const int retryDelayMs = 120;
 
             foreach (var id in deviceIds)
             {
