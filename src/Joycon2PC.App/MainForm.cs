@@ -147,7 +147,7 @@ namespace Joycon2PC.App
             {
                 BackColor   = PANEL,
                 Dock        = DockStyle.Fill,
-                MinimumSize = new Size(432, 380),
+                MinimumSize = new Size(432, 332),
             };
             contentGrid.Controls.Add(_joyconViz, 0, 0);
 
@@ -1289,7 +1289,7 @@ namespace Joycon2PC.App
             //  Front face (top→bottom): ZL/L triggers, −, L-Stick, LED, D-pad, Cap
             private void DrawLJoyCon(Graphics g)
             {
-                const int bx = 8, by = 48, bw = 174, bh = 308;
+                const int bx = 8, by = 44, bw = 174, bh = 294;
 
                 // ZL trigger (above body)
                 FillRR(g, On("ZL") ? Ac("ZL") : C_SHLD, 10,  2, 92, 30, 8);
@@ -1309,15 +1309,15 @@ namespace Joycon2PC.App
                 CircBtn(g, 150, 75, 10, "-", On("-"));
 
                 // Left Stick (upper-center of face)
-                StickViz(g, 62, 120, 30, _lx, _ly, C_TRIM_L, On("LS"));
-                g.DrawString("LS", new Font("Segoe UI", 6.5f), new SolidBrush(C_LABEL), 94, 108);
+                StickViz(g, 62, 116, 30, _lx, _ly, C_TRIM_L, On("LS"));
+                g.DrawString("LS", new Font("Segoe UI", 6.5f), new SolidBrush(C_LABEL), 94, 104);
 
-                // LED dots (4, cosmetic)
+                // LED dots (4, vertical)
                 for (int i = 0; i < 4; i++)
-                    g.FillEllipse(new SolidBrush(Color.FromArgb(62, 62, 72)), 92 + i * 10, 158, 5, 5);
+                    g.FillEllipse(new SolidBrush(Color.FromArgb(62, 62, 72)), 172, 152 + i * 10, 5, 5);
 
                 // D-pad
-                const int dpx = 76, dpy = 248;
+                const int dpx = 76, dpy = 236;
                 // arms
                 DPadArm(g, dpx - 9, dpy - 28, 18, 20, "Up", On("Up"));
                 DPadArm(g, dpx - 9, dpy +  8, 18, 20, "Dn", On("Dn"));
@@ -1327,14 +1327,14 @@ namespace Joycon2PC.App
                 g.FillRectangle(new SolidBrush(C_CROSS), dpx - 9, dpy - 9, 18, 18);
 
                 // Screenshot / Capture button
-                SqBtn(g, 130, 236, 20, 20, "■", On("Cap"), Ac("Cap"));
+                SqBtn(g, 130, 258, 20, 20, "■", On("Cap"), Ac("Cap"));
             }
 
             // ── R Joy-Con 2 ──────────────────────────────────────────────────
             //  Front face (top→bottom): ZR/R triggers, +, ABXY+Home (upper), R-Stick, C
             private void DrawRJoyCon(Graphics g)
             {
-                const int bx = 252, by = 48, bw = 174, bh = 308;
+                const int bx = 252, by = 44, bw = 174, bh = 294;
 
                 // ZR trigger
                 FillRR(g, On("ZR") ? Ac("ZR") : C_SHLD, 332,  2, 92, 30, 8);
@@ -1350,28 +1350,28 @@ namespace Joycon2PC.App
                 DrawRR(g, new Pen(Color.FromArgb(68, 68, 76), 1.5f), bx, by, bw, bh, 26);
 
                 // + button (upper-left of face)
-                CircBtn(g, 278, 75, 10, "+", On("+"));
+                CircBtn(g, 283, 75, 10, "+", On("+"));
 
                 // ABXY diamond (upper-right area)
                 //   X=top  Y=left  A=right  B=bottom   each r=13
-                CircBtn(g, 376,  84, 13, "X", On("X"));
-                CircBtn(g, 350, 110, 13, "Y", On("Y"));
-                CircBtn(g, 402, 110, 13, "A", On("A"));
-                CircBtn(g, 376, 136, 13, "B", On("B"));
+                CircBtn(g, 376,  82, 13, "X", On("X"));
+                CircBtn(g, 350, 108, 13, "Y", On("Y"));
+                CircBtn(g, 402, 108, 13, "A", On("A"));
+                CircBtn(g, 376, 134, 13, "B", On("B"));
 
-                // Home button (left of ABXY)
-                CircBtn(g, 302, 120, 12, "⌂", On("Home"));
+                // Home button (between RS and C)
+                CircBtn(g, 315, 248, 12, "⌂", On("Home"));
 
-                // LED dots
+                // LED dots (4, vertical)
                 for (int i = 0; i < 4; i++)
-                    g.FillEllipse(new SolidBrush(Color.FromArgb(62, 62, 72)), 260 + i * 10, 158, 5, 5);
+                    g.FillEllipse(new SolidBrush(Color.FromArgb(62, 62, 72)), 257, 152 + i * 10, 5, 5);
 
                 // Right Stick (lower-center, below ABXY)
-                StickViz(g, 360, 218, 30, _rx, _ry, C_TRIM_R, On("RS"));
-                g.DrawString("RS", new Font("Segoe UI", 6.5f), new SolidBrush(C_LABEL), 392, 206);
+                StickViz(g, 360, 208, 30, _rx, _ry, C_TRIM_R, On("RS"));
+                g.DrawString("RS", new Font("Segoe UI", 6.5f), new SolidBrush(C_LABEL), 392, 196);
 
                 // C button (new Joy-Con 2, bottom-center)
-                CircBtn(g, 348, 296, 15, "C", On("C"));
+                CircBtn(g, 315, 286, 12, "C", On("C"));
             }
 
             // ── drawing primitives ──────────────────────────────────────────
@@ -1406,15 +1406,38 @@ namespace Joycon2PC.App
             private void DPadArm(Graphics g, int x, int y, int w, int h, string btn, bool pressed)
             {
                 FillRR(g, pressed ? Color.White : C_BTN, x, y, w, h, 3);
-                string arrow = btn switch
+                Color fg = pressed ? Color.Black : C_LABEL;
+                float cx = x + w / 2f;
+                float cy = y + h / 2f;
+                float s = Math.Min(w, h) * 0.32f;
+                PointF[] pts = btn switch
                 {
-                    "Up" => "▲", "Dn" => "▼", "Lt" => "◄", _ => "►"
+                    "Up" => new[]
+                    {
+                        new PointF(cx, cy - s),
+                        new PointF(cx - s, cy + s),
+                        new PointF(cx + s, cy + s),
+                    },
+                    "Dn" => new[]
+                    {
+                        new PointF(cx - s, cy - s),
+                        new PointF(cx + s, cy - s),
+                        new PointF(cx, cy + s),
+                    },
+                    "Lt" => new[]
+                    {
+                        new PointF(cx - s, cy),
+                        new PointF(cx + s, cy - s),
+                        new PointF(cx + s, cy + s),
+                    },
+                    _ => new[]
+                    {
+                        new PointF(cx + s, cy),
+                        new PointF(cx - s, cy - s),
+                        new PointF(cx - s, cy + s),
+                    },
                 };
-                using var f = new Font("Segoe UI", 6f);
-                var sz = g.MeasureString(arrow, f);
-                g.DrawString(arrow, f,
-                    new SolidBrush(pressed ? Color.Black : C_LABEL),
-                    x + w / 2f - sz.Width / 2, y + h / 2f - sz.Height / 2);
+                g.FillPolygon(new SolidBrush(fg), pts);
             }
 
             private void SqBtn(Graphics g, int x, int y, int w, int h,
