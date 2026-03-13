@@ -14,7 +14,8 @@ Connects both Joy-Con 2 (L) and (R), merges them into one virtual gamepad. No US
 
 | Requirement | Notes |
 |---|---|
-| Windows 11 (22H2+) | Bluetooth LE WinRT APIs required |
+| Windows 11 (22H2+) recommended | Fully validated BLE behavior and target runtime environment |
+| Windows 10 (22H2) possible but unverified | Build may work, but BLE pairing/reconnect/latency behavior is not guaranteed |
 | [ViGEmBus driver](https://github.com/nefarius/ViGEmBus/releases/latest) | Install before running |
 | .NET 9 Runtime | Or build from source |
 | Joy-Con 2 (L) + (R) | Paired in Windows Bluetooth Settings |
