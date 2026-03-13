@@ -8,42 +8,45 @@ namespace Joycon2PC.Core
     /// </summary>
     public static class NS2InputReportDecoder
     {
+        /// <summary>Factory calibration centre for all four 12-bit stick axes (min=746, centre=1998, max=3249).</summary>
         public const int NeutralStickValue = 1998;
+
+        /// <summary>
+        /// Value the Joy-Con 2 hardware reports in an unused stick slot (e.g. the right-stick bytes on a Joy-Con L).
+        /// This is 0x7FF (2047), which is the 11-bit all-ones pattern, not the 12-bit all-ones (0xFFF = 4095).
+        /// Axes that read this value are treated as centred rather than as a real deflection.
+        /// </summary>
         public const int SentinelStickValue = 2047;
 
+        /// <summary>All parsed values extracted from a single Joy-Con 2 BLE input notification.</summary>
         public readonly struct DecodedInput
         {
-            public DecodedInput(
-                uint buttons,
-                int rawLeftStickX,
-                int rawLeftStickY,
-                int rawRightStickX,
-                int rawRightStickY,
-                int leftStickX,
-                int leftStickY,
-                int rightStickX,
-                int rightStickY)
-            {
-                Buttons = buttons;
-                RawLeftStickX = rawLeftStickX;
-                RawLeftStickY = rawLeftStickY;
-                RawRightStickX = rawRightStickX;
-                RawRightStickY = rawRightStickY;
-                LeftStickX = leftStickX;
-                LeftStickY = leftStickY;
-                RightStickX = rightStickX;
-                RightStickY = rightStickY;
-            }
+            /// <summary>4-byte button bitmask (bytes [4..7] after prefix strip).</summary>
+            public uint Buttons { get; init; }
 
-            public uint Buttons { get; }
-            public int RawLeftStickX { get; }
-            public int RawLeftStickY { get; }
-            public int RawRightStickX { get; }
-            public int RawRightStickY { get; }
-            public int LeftStickX { get; }
-            public int LeftStickY { get; }
-            public int RightStickX { get; }
-            public int RightStickY { get; }
+            /// <summary>Raw 12-bit left-stick X before sentinel neutralisation (0 when report is too short).</summary>
+            public int RawLeftStickX { get; init; }
+
+            /// <summary>Raw 12-bit left-stick Y before sentinel neutralisation (0 when report is too short).</summary>
+            public int RawLeftStickY { get; init; }
+
+            /// <summary>Raw 12-bit right-stick X before sentinel neutralisation (0 when report is too short).</summary>
+            public int RawRightStickX { get; init; }
+
+            /// <summary>Raw 12-bit right-stick Y before sentinel neutralisation (0 when report is too short).</summary>
+            public int RawRightStickY { get; init; }
+
+            /// <summary>Left-stick X after sentinel neutralisation; equals <see cref="NeutralStickValue"/> when raw value is 0 or <see cref="SentinelStickValue"/>.</summary>
+            public int LeftStickX { get; init; }
+
+            /// <summary>Left-stick Y after sentinel neutralisation.</summary>
+            public int LeftStickY { get; init; }
+
+            /// <summary>Right-stick X after sentinel neutralisation.</summary>
+            public int RightStickX { get; init; }
+
+            /// <summary>Right-stick Y after sentinel neutralisation.</summary>
+            public int RightStickY { get; init; }
         }
 
         public static bool TryDecode(byte[] data, out DecodedInput decoded)
@@ -90,7 +93,18 @@ namespace Joycon2PC.Core
                 ry = (rawRy == 0 || rawRy == SentinelStickValue) ? NeutralStickValue : rawRy;
             }
 
-            decoded = new DecodedInput(buttons, rawLx, rawLy, rawRx, rawRy, lx, ly, rx, ry);
+            decoded = new DecodedInput
+            {
+                Buttons        = buttons,
+                RawLeftStickX  = rawLx,
+                RawLeftStickY  = rawLy,
+                RawRightStickX = rawRx,
+                RawRightStickY = rawRy,
+                LeftStickX     = lx,
+                LeftStickY     = ly,
+                RightStickX    = rx,
+                RightStickY    = ry,
+            };
             return true;
         }
     }
