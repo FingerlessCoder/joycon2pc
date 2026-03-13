@@ -451,6 +451,18 @@ namespace Joycon2PC.App
                 const int WARMUP_REPORTS = 30;
                 var warmupReports = new Dictionary<string, int>();
 
+                // Keep hot-path logs off by default; high-frequency console writes can
+                // amplify lag and jitter when report rate is high.
+                bool enableRawByteDiffLog = false;
+                bool enableVerboseInputLog = false;
+
+                // Require the same button word in N consecutive reports before applying.
+                // This filters short glitches without adding noticeable latency.
+                const int BUTTON_DEBOUNCE_REPORTS = 2;
+                var buttonCandidate = new Dictionary<string, uint>();
+                var buttonStableCounts = new Dictionary<string, int>();
+                var buttonDebounced = new Dictionary<string, uint>();
+
                 scanner.RawReportReceived += (deviceId, data) =>
                 {
                     string shortId = deviceId.Length > 8 ? deviceId[..8] : deviceId;
@@ -465,19 +477,21 @@ namespace Joycon2PC.App
                     }
 
                     // ── Byte-diff logger: scan ALL bytes (skip [0]=rolling counter) ──
-                    // Output goes to Console so it's never lost even if UI thread is busy.
-                    if (lastRawBytes.TryGetValue(deviceId, out var prevRaw) && prevRaw.Length == data.Length)
+                    if (enableRawByteDiffLog)
                     {
-                        var diff = new System.Text.StringBuilder();
-                        for (int i = 1; i < data.Length; i++)
+                        if (lastRawBytes.TryGetValue(deviceId, out var prevRaw) && prevRaw.Length == data.Length)
                         {
-                            if (data[i] != prevRaw[i])
-                                diff.Append($" [{i}]:{prevRaw[i]:X2}→{data[i]:X2}");
+                            var diff = new System.Text.StringBuilder();
+                            for (int i = 1; i < data.Length; i++)
+                            {
+                                if (data[i] != prevRaw[i])
+                                    diff.Append($" [{i}]:{prevRaw[i]:X2}→{data[i]:X2}");
+                            }
+                            if (diff.Length > 0)
+                                Console.WriteLine($"DIFF[{shortId}]{diff}");
                         }
-                        if (diff.Length > 0)
-                            Console.WriteLine($"DIFF[{shortId}]{diff}");
+                        lastRawBytes[deviceId] = (byte[])data.Clone();
                     }
-                    lastRawBytes[deviceId] = (byte[])data.Clone();
 
                     // ── Strip 0xA1 HID-over-GATT prefix if present ──────
                     // BLE GATT notifications from a HID service prepend 0xA1
@@ -548,11 +562,37 @@ namespace Joycon2PC.App
                     if (wc < WARMUP_REPORTS)
                         state.Buttons = 0;  // discard init-burst garbage
 
+                    // Per-device button debounce (word-level): accept only after N
+                    // consecutive identical reports to reduce phantom press/release spikes.
+                    if (!buttonCandidate.TryGetValue(deviceId, out uint candidate) || candidate != state.Buttons)
+                    {
+                        buttonCandidate[deviceId] = state.Buttons;
+                        buttonStableCounts[deviceId] = 1;
+                    }
+                    else
+                    {
+                        int count = buttonStableCounts.TryGetValue(deviceId, out var prevCount) ? prevCount : 1;
+                        if (count < BUTTON_DEBOUNCE_REPORTS)
+                            count++;
+                        buttonStableCounts[deviceId] = count;
+                    }
+
+                    if (!buttonDebounced.TryGetValue(deviceId, out uint stableButtons))
+                        stableButtons = 0;
+
+                    if (buttonStableCounts.TryGetValue(deviceId, out int stableCount) && stableCount >= BUTTON_DEBOUNCE_REPORTS)
+                    {
+                        stableButtons = buttonCandidate[deviceId];
+                        buttonDebounced[deviceId] = stableButtons;
+                    }
+
+                    state.Buttons = stableButtons;
+
                     _deviceStates[deviceId] = state;
 
                     // ── Debug: log only when buttons change or stick moves >80 counts ──
                     // (Never BeginInvoke on every report — that floods the UI thread queue)
-                    if (IsHandleCreated)
+                    if (enableVerboseInputLog && IsHandleCreated)
                     {
                         lastButtons.TryGetValue(deviceId, out uint prevBtn);
                         lastStickLog.TryGetValue(deviceId, out var prevStick);

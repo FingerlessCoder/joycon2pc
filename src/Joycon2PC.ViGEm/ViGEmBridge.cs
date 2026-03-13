@@ -28,6 +28,17 @@ namespace Joycon2PC.ViGEm
         private const int NS2_CENTRE = 1998;
         private const int NS2_RANGE  = 3249 - 746;   // ≈ 2503 counts each side (asymmetric)
 
+        // Output conditioning for smoother and more stable stick behavior.
+        // Deadzone is applied in Xbox signed-short space (-32768..32767).
+        private const short AXIS_OUTPUT_DEADZONE = 2200;
+        private const float AXIS_SMOOTHING_ALPHA = 0.35f;
+
+        private bool _axisFilterInitialized = false;
+        private short _filteredLeftX;
+        private short _filteredLeftY;
+        private short _filteredRightX;
+        private short _filteredRightY;
+
         /// <summary>
         /// Fired when the game/OS sends a rumble command to the virtual Xbox controller.
         /// Parameters: (largeMotor 0–255, smallMotor 0–255).
@@ -73,10 +84,31 @@ namespace Joycon2PC.ViGEm
 
                 // ── Axes ─────────────────────────────────────────────────────────────
                 // 12-bit NS2 stick (0..4095, factory centre ≈ 1998) → signed short (-32768..32767)
-                c.SetAxisValue(Xbox360Axis.LeftThumbX,  MapStick(state.LeftStickX));
-                c.SetAxisValue(Xbox360Axis.LeftThumbY,  MapStick(state.LeftStickY));
-                c.SetAxisValue(Xbox360Axis.RightThumbX, MapStick(state.RightStickX));
-                c.SetAxisValue(Xbox360Axis.RightThumbY, MapStick(state.RightStickY));
+                short rawLx = MapStick(state.LeftStickX);
+                short rawLy = MapStick(state.LeftStickY);
+                short rawRx = MapStick(state.RightStickX);
+                short rawRy = MapStick(state.RightStickY);
+
+                if (!_axisFilterInitialized)
+                {
+                    _filteredLeftX = ApplyDeadzone(rawLx);
+                    _filteredLeftY = ApplyDeadzone(rawLy);
+                    _filteredRightX = ApplyDeadzone(rawRx);
+                    _filteredRightY = ApplyDeadzone(rawRy);
+                    _axisFilterInitialized = true;
+                }
+                else
+                {
+                    _filteredLeftX = FilterAxis(_filteredLeftX, rawLx);
+                    _filteredLeftY = FilterAxis(_filteredLeftY, rawLy);
+                    _filteredRightX = FilterAxis(_filteredRightX, rawRx);
+                    _filteredRightY = FilterAxis(_filteredRightY, rawRy);
+                }
+
+                c.SetAxisValue(Xbox360Axis.LeftThumbX, _filteredLeftX);
+                c.SetAxisValue(Xbox360Axis.LeftThumbY, _filteredLeftY);
+                c.SetAxisValue(Xbox360Axis.RightThumbX, _filteredRightX);
+                c.SetAxisValue(Xbox360Axis.RightThumbY, _filteredRightY);
 
                 // ZL / ZR → analogue triggers (0 or 255)
                 c.SetSliderValue(Xbox360Slider.LeftTrigger,  state.IsPressed(SW2Button.ZL) ? (byte)255 : (byte)0);
@@ -135,6 +167,27 @@ namespace Joycon2PC.ViGEm
             return (short)scaled;
         }
 
+        private static short ApplyDeadzone(short value)
+            => Math.Abs(value) < AXIS_OUTPUT_DEADZONE ? (short)0 : value;
+
+        private static short FilterAxis(short previous, short current)
+        {
+            short target = ApplyDeadzone(current);
+            int next = previous + (int)Math.Round((target - previous) * AXIS_SMOOTHING_ALPHA);
+
+            if (Math.Abs(next) < AXIS_OUTPUT_DEADZONE)
+                next = 0;
+
+            return ClampToShort(next);
+        }
+
+        private static short ClampToShort(int value)
+        {
+            if (value > short.MaxValue) return short.MaxValue;
+            if (value < short.MinValue) return short.MinValue;
+            return (short)value;
+        }
+
         public void Dispose()
         {
             try
@@ -143,6 +196,11 @@ namespace Joycon2PC.ViGEm
                 (_controller as IDisposable)?.Dispose();
                 _client?.Dispose();
                 _connected = false;
+                _axisFilterInitialized = false;
+                _filteredLeftX = 0;
+                _filteredLeftY = 0;
+                _filteredRightX = 0;
+                _filteredRightY = 0;
             }
             catch { }
         }
