@@ -58,6 +58,57 @@ namespace Joycon2PC.App.Bluetooth
     public string GetDeviceName(string deviceId)
         => _deviceNames.TryGetValue(deviceId, out var n) ? n : string.Empty;
 
+    private static string ShortId(string deviceId)
+        => deviceId.Length > 8 ? deviceId[..8] : deviceId;
+
+    private async Task<bool> StartNotificationsWithRetryAsync(
+        string deviceId,
+        GattCharacteristic characteristic,
+        CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await characteristic.StartNotificationsAsync();
+                Console.WriteLine($"      Notify enabled [{ShortId(deviceId)}] attempt {attempt}/{maxAttempts}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"      Notify enable failed [{ShortId(deviceId)}] attempt {attempt}/{maxAttempts}: {ex.Message}");
+                if (attempt >= maxAttempts)
+                    return false;
+
+                try
+                {
+                    await Task.Delay(250 * attempt, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private void RemoveKnownDevice(string deviceId, string reason)
+    {
+        lock (_writableCharacteristics)
+        {
+            bool removed = _writableCharacteristics.Remove(deviceId);
+            _subManagers.Remove(deviceId);
+            _deviceProductIds.Remove(deviceId);
+            _deviceNames.Remove(deviceId);
+            if (removed)
+                Console.WriteLine($"Removed device [{ShortId(deviceId)}]: {reason}");
+        }
+    }
+
     public async Task ScanAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -176,6 +227,7 @@ namespace Joycon2PC.App.Bluetooth
 
             // â”€â”€ Subscribe to NS2 service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             bool foundNS2 = false;
+            bool subscribedInput = false;
             foreach (var svc in services)
             {
                 string svcUuid = svc.Uuid.ToString().ToLowerInvariant();
@@ -236,9 +288,19 @@ namespace Joycon2PC.App.Bluetooth
                                 if (_subManagers.TryGetValue(deviceId, out var mgr))
                                     mgr.ProcessIncomingReport(e.Value);
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Raw report handler error [{ShortId(deviceId)}]: {ex.Message}");
+                            }
                         };
-                        await ch.StartNotificationsAsync();
+
+                        bool notifyReady = await StartNotificationsWithRetryAsync(deviceId, ch, cancellationToken);
+                        if (!notifyReady)
+                        {
+                            Console.WriteLine("      Warning: NS2 INPUT notification setup failed after retries.");
+                            continue;
+                        }
+                        subscribedInput = true;
 
                         // Send SPI calibration read IMMEDIATELY after subscribing.
                         // The reference implementation (NS2-Connect.py) does this right
@@ -271,8 +333,13 @@ namespace Joycon2PC.App.Bluetooth
                 }
             }
             // Notify listeners immediately — before ScanAsync() finishes its 30-second window.
-            if (foundNS2)
+            if (foundNS2 && subscribedInput)
                 DeviceConnected?.Invoke(deviceId, name);
+            else if (foundNS2 && !subscribedInput)
+            {
+                Console.WriteLine($"    Warning: NS2 service found but input notifications failed for {name} ({ShortId(deviceId)}).");
+                RemoveKnownDevice(deviceId, "notification setup failed");
+            }
             if (!foundNS2)
             {
                 Console.WriteLine("    âš  NS2 service not found â€” falling back to all characteristics");
@@ -287,9 +354,17 @@ namespace Joycon2PC.App.Bluetooth
                             ch.CharacteristicValueChanged += (s, e) =>
                             {
                                 if (e.Value == null) return;
-                                try { RawReportReceived?.Invoke(deviceId, e.Value); } catch { }
+                                try { RawReportReceived?.Invoke(deviceId, e.Value); }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"Raw report handler error [{ShortId(deviceId)}]: {ex.Message}");
+                                }
                             };
-                            try { await ch.StartNotificationsAsync(); } catch { }
+                            try
+                            {
+                                await StartNotificationsWithRetryAsync(deviceId, ch, cancellationToken);
+                            }
+                            catch { }
                         }
                         if (!_writableCharacteristics.ContainsKey(deviceId) &&
                             (ch.Properties.HasFlag(GattCharacteristicProperties.Write) ||
@@ -304,12 +379,7 @@ namespace Joycon2PC.App.Bluetooth
             dev.GattServerDisconnected += (s, e) =>
             {
                 Console.WriteLine($"Disconnected: {name}");
-                lock (_writableCharacteristics)
-                {
-                    _writableCharacteristics.Remove(deviceId);
-                    _subManagers.Remove(deviceId);
-                    _deviceProductIds.Remove(deviceId);
-                }
+                RemoveKnownDevice(deviceId, "GattServerDisconnected event");
             };
         }
         catch (Exception ex)
@@ -324,7 +394,12 @@ namespace Joycon2PC.App.Bluetooth
         _subManagers[deviceId] = new Joycon2PC.Core.SubcommandManager(async (payload, ct2) =>
         {
             try { await ch.WriteValueWithoutResponseAsync(payload); return true; }
-            catch (Exception ex) { Console.WriteLine($"Write failed: {ex.Message}"); return false; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Write failed [{ShortId(deviceId)}]: {ex.Message}");
+                RemoveKnownDevice(deviceId, "write failure in SubcommandManager");
+                return false;
+            }
         });
     }
 
@@ -344,6 +419,7 @@ namespace Joycon2PC.App.Bluetooth
         catch (Exception ex)
         {
             Console.WriteLine($"Write failed to {deviceId}: {ex.Message}");
+            RemoveKnownDevice(deviceId, "write failure in SendSubcommandAsync");
             return false;
         }
     }
@@ -408,7 +484,11 @@ namespace Joycon2PC.App.Bluetooth
         {
             if (!_writableCharacteristics.TryGetValue(id, out var ch) || ch == null) continue;
             try { await ch.WriteValueWithoutResponseAsync(payload); }
-            catch { /* non-fatal — controller may have disconnected */ }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Rumble write failed [{ShortId(id)}]: {ex.Message}");
+                RemoveKnownDevice(id, "write failure in SendRumbleAsync");
+            }
         }
     }
 #else
