@@ -14,25 +14,25 @@ namespace Joycon2PC.App
     public sealed class MainForm : Form
     {
         // ── theme colours ──────────────────────────────────────────────────
-        private static readonly Color BG            = Color.FromArgb(241, 245, 250);
-        private static readonly Color PANEL         = Color.FromArgb(255, 255, 255);
-        private static readonly Color PANEL_ALT     = Color.FromArgb(247, 250, 253);
-        private static readonly Color ACCENT        = Color.FromArgb(0, 108, 126);
-        private static readonly Color GREEN         = Color.FromArgb(41, 152, 100);
-        private static readonly Color RED           = Color.FromArgb(196, 76, 62);
-        private static readonly Color YELLOW        = Color.FromArgb(206, 137, 35);
-        private static readonly Color TXT           = Color.FromArgb(32, 44, 58);
-        private static readonly Color TXT_DIM       = Color.FromArgb(111, 125, 141);
-        private static readonly Color BORDER        = Color.FromArgb(212, 221, 232);
-        private static readonly Color BTN_PRIMARY   = Color.FromArgb(0, 120, 148);
-        private static readonly Color BTN_STOP      = Color.FromArgb(192, 74, 60);
-        private static readonly Color BTN_SECONDARY = Color.FromArgb(233, 240, 247);
-        private static readonly Color STICK_BG      = Color.FromArgb(245, 249, 253);
-        private static readonly Color INACTIVE_BTN  = Color.FromArgb(227, 234, 241);
-        private static readonly Font  FONT_LG       = new("Bahnschrift", 11f, FontStyle.Regular);
-        private static readonly Font  FONT_MD       = new("Bahnschrift", 9f, FontStyle.Regular);
-        private static readonly Font  FONT_SM       = new("Bahnschrift", 8f, FontStyle.Regular);
-        private static readonly Font  FONT_BOLD     = new("Bahnschrift", 9f, FontStyle.Bold);
+        private static readonly Color BG            = Color.FromArgb(20,  20,  20);
+        private static readonly Color PANEL         = Color.FromArgb(32,  32,  32);
+        private static readonly Color PANEL_ALT     = Color.FromArgb(26,  26,  26);
+        private static readonly Color ACCENT        = Color.FromArgb(0,   120, 212);
+        private static readonly Color GREEN         = Color.FromArgb(72,  199, 116);
+        private static readonly Color RED           = Color.FromArgb(232, 80,  68);
+        private static readonly Color YELLOW        = Color.FromArgb(255, 185, 0);
+        private static readonly Color TXT           = Color.FromArgb(240, 240, 240);
+        private static readonly Color TXT_DIM       = Color.FromArgb(148, 148, 148);
+        private static readonly Color BORDER        = Color.FromArgb(52,  52,  52);
+        private static readonly Color BTN_PRIMARY   = Color.FromArgb(0,   102, 204);
+        private static readonly Color BTN_STOP      = Color.FromArgb(180, 30,  30);
+        private static readonly Color BTN_SECONDARY = Color.FromArgb(50,  50,  50);
+        private static readonly Color STICK_BG      = Color.FromArgb(22,  22,  22);
+        private static readonly Color INACTIVE_BTN  = Color.FromArgb(44,  44,  44);
+        private static readonly Font  FONT_LG       = new("Segoe UI", 11f, FontStyle.Regular);
+        private static readonly Font  FONT_MD       = new("Segoe UI", 9f,  FontStyle.Regular);
+        private static readonly Font  FONT_SM       = new("Segoe UI", 8f,  FontStyle.Regular);
+        private static readonly Font  FONT_BOLD     = new("Segoe UI", 9f,  FontStyle.Bold);
 
         // ── runtime state ──────────────────────────────────────────────────
         private JoyconState _lastState = new();
@@ -154,63 +154,67 @@ namespace Joycon2PC.App
 
             pnlLeft.Controls.Add(MakeLabel("Controller Inputs", 10, new Point(10, 8), bold: true, color: ACCENT));
 
-            // ── Joy-Con 2 physical layout — L half | R half ──────────────
-            // Vertical divider between the two halves
+            // ── Joy-Con 2 physical layout ─────────────────────────────────
+            // Vertical divider
             pnlLeft.Controls.Add(new Panel
             {
-                BackColor = BORDER,
-                Bounds    = new Rectangle(213, 8, 1, 324),
+                BackColor = Color.FromArgb(70, 70, 70),
+                Bounds    = new Rectangle(213, 2, 1, 330),
             });
 
-            // ══ L Joy-Con half (x: 0–192) ═══════════════════════════════
-            pnlLeft.Controls.Add(MakeLabel("L Joy-Con", 8, new Point(10, 34), bold: true, color: ACCENT));
+            // ══ L Joy-Con 2  (ZL/L top · stick upper · cap · d-pad lower) ══
+            // Layout mirrors physical front face (top→bottom: shoulders, −, stick+LS+Cap, d-pad)
+            pnlLeft.Controls.Add(MakeLabel("L Joy-Con 2", 8, new Point(10, 6), bold: true, color: ACCENT));
 
-            // Shoulder row (top-to-bottom on physical controller): ZL · L
-            AddButtonIndicator(pnlLeft, "ZL",  new Point(10, 56), YELLOW);
-            AddButtonIndicator(pnlLeft, "L",   new Point(34, 56));
+            // Top: shoulder buttons ZL · L
+            AddButtonIndicator(pnlLeft, "ZL", new Point(10, 28), YELLOW);
+            AddButtonIndicator(pnlLeft, "L",  new Point(34, 28));
+            // − (Minus) at top-right, opposite corner from shoulders
+            AddButtonIndicator(pnlLeft, "-",  new Point(144, 28));
 
-            // Menu row: − (Minus) · LS (stick click)
-            AddButtonIndicator(pnlLeft, "-",   new Point(10, 80));
-            AddButtonIndicator(pnlLeft, "LS",  new Point(34, 80), Color.FromArgb(70, 146, 196));
-
-            // Left stick visualiser
-            _pnlLStick = MakeStickPanel(new Point(18, 106));
+            // Upper-centre: Left stick
+            _pnlLStick = MakeStickPanel(new Point(10, 56));
             pnlLeft.Controls.Add(_pnlLStick);
-            pnlLeft.Controls.Add(MakeLabel("L Stick", 7, new Point(28, 190), color: TXT_DIM));
+            pnlLeft.Controls.Add(MakeLabel("L Stick", 7, new Point(26, 144), color: TXT_DIM));
+            // LS (stick click) and Cap sit to the right of the stick
+            AddButtonIndicator(pnlLeft, "LS",  new Point(104, 56),  Color.FromArgb(80, 150, 220));
+            AddButtonIndicator(pnlLeft, "Cap", new Point(104, 80),  Color.FromArgb(160, 110, 210));
 
-            // D-pad cross
-            AddButtonIndicator(pnlLeft, "Up", new Point(54, 214));
-            AddButtonIndicator(pnlLeft, "Lt", new Point(32, 236));
-            AddButtonIndicator(pnlLeft, "Dn", new Point(54, 258));
-            AddButtonIndicator(pnlLeft, "Rt", new Point(76, 236));
+            // Lower: D-pad cross
+            AddButtonIndicator(pnlLeft, "Up", new Point(66, 174));
+            AddButtonIndicator(pnlLeft, "Lt", new Point(42, 196));
+            AddButtonIndicator(pnlLeft, "Rt", new Point(90, 196));
+            AddButtonIndicator(pnlLeft, "Dn", new Point(66, 218));
 
-            // ══ R Joy-Con half (x: 196–388) ══════════════════════════════
-            const int rx = 220;
-            pnlLeft.Controls.Add(MakeLabel("R Joy-Con", 8, new Point(rx + 6, 34), bold: true, color: ACCENT));
+            // ══ R Joy-Con 2  (ZR/R top · ABXY upper-right · +/Home · stick lower · C bottom) ══
+            // Layout mirrors physical front face
+            const int rx = 216;
+            pnlLeft.Controls.Add(MakeLabel("R Joy-Con 2", 8, new Point(rx + 8, 6), bold: true, color: ACCENT));
 
-            // Shoulder row: ZR · C (new JC2 button) · R
-            AddButtonIndicator(pnlLeft, "ZR", new Point(rx + 6, 56), YELLOW);
-            AddButtonIndicator(pnlLeft, "C",  new Point(rx + 30, 56), Color.FromArgb(220, 135, 34));
-            AddButtonIndicator(pnlLeft, "R",  new Point(rx + 54, 56));
+            // Top: shoulder buttons ZR · R
+            AddButtonIndicator(pnlLeft, "ZR", new Point(rx + 8,  28), YELLOW);
+            AddButtonIndicator(pnlLeft, "R",  new Point(rx + 32, 28));
+            // + (Plus) and face-button X share the top row (upper-right area)
+            AddButtonIndicator(pnlLeft, "+",  new Point(rx + 90,  28));
+            AddButtonIndicator(pnlLeft, "X",  new Point(rx + 134, 28));
 
-            // Menu row: + (Plus) · Home · Cap (screenshot)
-            AddButtonIndicator(pnlLeft, "+",    new Point(rx + 6,  80));
-            AddButtonIndicator(pnlLeft, "Home", new Point(rx + 30, 80), ACCENT);
-            AddButtonIndicator(pnlLeft, "Cap",  new Point(rx + 54, 80), Color.FromArgb(190, 97, 86));
+            // Second row: Home + ABXY sides
+            AddButtonIndicator(pnlLeft, "Home", new Point(rx + 90,  52), ACCENT);
+            AddButtonIndicator(pnlLeft, "Y",    new Point(rx + 110, 52));
+            AddButtonIndicator(pnlLeft, "A",    new Point(rx + 158, 52), Color.FromArgb(200, 60, 60));
 
-            // Right stick visualiser
-            _pnlRStick = MakeStickPanel(new Point(rx + 6, 106));
+            // Third row: face B
+            AddButtonIndicator(pnlLeft, "B",    new Point(rx + 134, 76), Color.FromArgb(200, 160, 40));
+
+            // Lower-centre: Right stick  (below ABXY just like physical layout)
+            _pnlRStick = MakeStickPanel(new Point(rx + 8, 104));
             pnlLeft.Controls.Add(_pnlRStick);
-            pnlLeft.Controls.Add(MakeLabel("R Stick", 7, new Point(rx + 18, 190), color: TXT_DIM));
+            pnlLeft.Controls.Add(MakeLabel("R Stick", 7, new Point(rx + 24, 192), color: TXT_DIM));
+            // RS and Screenshot (Cap) sit to the right of the stick
+            AddButtonIndicator(pnlLeft, "RS", new Point(rx + 98, 104), Color.FromArgb(80, 150, 220));
 
-            // RS (stick click)
-            AddButtonIndicator(pnlLeft, "RS",  new Point(rx + 54, 190), Color.FromArgb(70, 146, 196));
-
-            // ABXY face buttons (diamond): X=top, Y=left, A=right, B=bottom
-            AddButtonIndicator(pnlLeft, "X", new Point(rx + 140, 214));
-            AddButtonIndicator(pnlLeft, "Y", new Point(rx + 116, 236));
-            AddButtonIndicator(pnlLeft, "A", new Point(rx + 164, 236));
-            AddButtonIndicator(pnlLeft, "B", new Point(rx + 140, 258));
+            // Bottom: C button (new Joy-Con 2 button, physically at the bottom of R face)
+            AddButtonIndicator(pnlLeft, "C",  new Point(rx + 98, 128), Color.FromArgb(220, 135, 40));
 
             // ── log panel (right column) ──────────────────────────────────
             var logCard = new Panel
@@ -231,7 +235,7 @@ namespace Joycon2PC.App
             {
                 BackColor   = PANEL_ALT,
                 ForeColor   = TXT,
-                Font        = new Font("Cascadia Mono", 9f),
+                Font        = new Font("Consolas", 9f),
                 ReadOnly    = true,
                 ScrollBars  = RichTextBoxScrollBars.Vertical,
                 BorderStyle = BorderStyle.None,
@@ -1214,7 +1218,7 @@ namespace Joycon2PC.App
             g.Clear(STICK_BG);
 
             // outer ring
-            g.DrawEllipse(new Pen(BORDER, 1),
+            g.DrawEllipse(new Pen(Color.FromArgb(80, 90, 110), 1),
                 1, 1, panel.Width - 3, panel.Height - 3);
 
             // centre crosshair
