@@ -48,12 +48,14 @@ Connects both Joy-Con 2 (L) and (R), merges them into one virtual gamepad. No US
 - [x] Virtual Xbox 360 controller output via ViGEmBus
 - [x] Rumble / haptics forwarded from XInput → physical Joy-Con 2 (game rumble triggers controller vibration)
 - [x] Single Joy-Con mode — one Joy-Con alone maps its stick to the left-stick output automatically
+- [x] Dark Fluent UI with GDI+-drawn Joy-Con 2 silhouette visualizer (live button/stick state)
 
 ---
 
 ## Roadmap / Dev Checklist
 
 ### 🔴 High priority
+- [ ] **BLE connection latency & jitter** — measure P95 connect time, report interval std dev, and stick idle noise across all scenarios; fix bottlenecks (tracked: #12)
 - [ ] **Reduce build size** — current self-contained EXE is ~190 MB (full .NET 9 runtime bundled); switch to framework-dependent publish → ~28 MB with no code changes needed; self-contained cannot be trimmed (WinForms limitation)
 - [ ] **Auto-reconnect on sleep/resume** — Windows drops BLE on sleep; add `SystemEvents.PowerModeChanged` listener to trigger reconnect automatically
 - [ ] **Single Joy-Con sideways mode** — rotated button mapping when used alone (SL/SR → LB/RB, D-pad becomes face buttons for Joy-Con L sideways)
@@ -107,7 +109,8 @@ Connects both Joy-Con 2 (L) and (R), merges them into one virtual gamepad. No US
 - [ ] **NFC** — not implemented
 
 ### Software
-- [ ] **Release binary / installer** — no compiled `.exe` published yet; must build from source
+- [x] **Release binary** — published as GitHub Release (framework-dependent single-file EXE)
+- [ ] **Installer** — no installer/MSIX yet; manual extract-and-run only
 - [ ] **Single-device fallback** — if only one Joy-Con connects, the merged stick output may be incorrect (sentinel detection may assign both L and R to the same device)
 - [ ] **Auto-reconnect on sleep/resume** — Windows BLE stack drops connections on sleep; Reconnect button is a manual workaround
 - [ ] **System tray / background mode** — app window must stay open; no minimise-to-tray
