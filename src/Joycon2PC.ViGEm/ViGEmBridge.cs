@@ -12,6 +12,7 @@ namespace Joycon2PC.ViGEm
     //   A   → A        B   → B        X   → X        Y   → Y
     //   R   → RB       ZR  → RT (trigger, full-press)
     //   L   → LB       ZL  → LT (trigger, full-press)
+    //   RSL/RSR → RB   LSL/LSR → LB (rail buttons fallback mapping)
     //   +   → Start    -   → Back
     //   Home→ Guide    Capture → (unused)
     //   LStick click → LS   RStick click → RS
@@ -122,8 +123,14 @@ namespace Joycon2PC.ViGEm
                 c.SetButtonState(Xbox360Button.Y, state.IsPressed(SW2Button.Y));
 
                 // Shoulders
-                c.SetButtonState(Xbox360Button.RightShoulder, state.IsPressed(SW2Button.R));
-                c.SetButtonState(Xbox360Button.LeftShoulder,  state.IsPressed(SW2Button.L));
+                bool leftShoulder = state.IsPressed(SW2Button.L)
+                                 || state.IsPressed(SW2Button.LSL)
+                                 || state.IsPressed(SW2Button.LSR);
+                bool rightShoulder = state.IsPressed(SW2Button.R)
+                                  || state.IsPressed(SW2Button.RSL)
+                                  || state.IsPressed(SW2Button.RSR);
+                c.SetButtonState(Xbox360Button.RightShoulder, rightShoulder);
+                c.SetButtonState(Xbox360Button.LeftShoulder,  leftShoulder);
 
                 // Menu / system
                 c.SetButtonState(Xbox360Button.Start,      state.IsPressed(SW2Button.Plus));
