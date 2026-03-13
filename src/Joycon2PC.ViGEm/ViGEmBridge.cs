@@ -168,16 +168,24 @@ namespace Joycon2PC.ViGEm
         }
 
         private static short ApplyDeadzone(short value)
-            => Math.Abs(value) < AXIS_OUTPUT_DEADZONE ? (short)0 : value;
+        {
+            int abs = Math.Abs(value);
+            if (abs <= AXIS_OUTPUT_DEADZONE)
+                return 0;
+
+            int sign = value < 0 ? -1 : 1;
+            int maxMagnitude = short.MaxValue;
+            int range = maxMagnitude - AXIS_OUTPUT_DEADZONE;
+
+            double normalized = (abs - AXIS_OUTPUT_DEADZONE) / (double)range;
+            int rescaled = (int)Math.Round(normalized * maxMagnitude);
+            return ClampToShort(sign * rescaled);
+        }
 
         private static short FilterAxis(short previous, short current)
         {
             short target = ApplyDeadzone(current);
             int next = previous + (int)Math.Round((target - previous) * AXIS_SMOOTHING_ALPHA);
-
-            if (Math.Abs(next) < AXIS_OUTPUT_DEADZONE)
-                next = 0;
-
             return ClampToShort(next);
         }
 

@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using Microsoft.Win32;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -34,6 +35,7 @@ namespace Joycon2PC.App
         private Joycon2PC.ViGEm.ViGEmBridge? _bridge;
         private JoyconParser _parser = new();
         private BLEScanner? _scanner;  // active scanner — used by Reconnect button
+        private bool _powerEventsSubscribed;
 
         // ── controls ──────────────────────────────────────────────────────
         private Label  _lblVigemStatus  = null!;
@@ -51,6 +53,9 @@ namespace Joycon2PC.App
         {
             InitUI();
             _parser.StateChanged += OnStateChanged;
+
+            SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            _powerEventsSubscribed = true;
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -391,6 +396,9 @@ namespace Joycon2PC.App
 
 #if INTHEHAND
             Log("Searching for Joy-Con over Bluetooth LE...", ACCENT);
+        var os = Environment.OSVersion.Version;
+        bool isWin11OrNewer = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
+        Log($"OS {os.Major}.{os.Minor}.{os.Build} ({(isWin11OrNewer ? "Win11+" : "Win10 compatibility mode")})", TXT_DIM);
             _lblJoyconStatus.Text      = "Scanning...";
             _lblJoyconStatus.ForeColor = YELLOW;
             _ = RunRealAsync(_cts.Token);
@@ -427,6 +435,7 @@ namespace Joycon2PC.App
             // ── outer reconnect loop ──────────────────────────────────────
             while (!ct.IsCancellationRequested)
             {
+                DateTime lastReportUtc = DateTime.UtcNow;
                 var scanner = new BLEScanner();
                 _scanner = scanner;
                 _deviceStates.Clear();
@@ -452,9 +461,10 @@ namespace Joycon2PC.App
                 var warmupReports = new Dictionary<string, int>();
 
                 // Keep hot-path logs off by default; high-frequency console writes can
-                // amplify lag and jitter when report rate is high.
-                bool enableRawByteDiffLog = false;
-                bool enableVerboseInputLog = false;
+                // amplify lag and jitter when report rate is high. Enable diagnostics
+                // at runtime using JOYCON2PC_RAW_BYTE_DIFF_LOG / JOYCON2PC_VERBOSE_INPUT_LOG.
+                bool enableRawByteDiffLog = IsEnabledByEnv("JOYCON2PC_RAW_BYTE_DIFF_LOG");
+                bool enableVerboseInputLog = IsEnabledByEnv("JOYCON2PC_VERBOSE_INPUT_LOG");
 
                 // Require the same button word in N consecutive reports before applying.
                 // This filters short glitches without adding noticeable latency.
@@ -465,6 +475,7 @@ namespace Joycon2PC.App
 
                 scanner.RawReportReceived += (deviceId, data) =>
                 {
+                    lastReportUtc = DateTime.UtcNow;
                     string shortId = deviceId.Length > 8 ? deviceId[..8] : deviceId;
 
                     // Hex dump first 3 reports per device
@@ -562,8 +573,11 @@ namespace Joycon2PC.App
                     if (wc < WARMUP_REPORTS)
                         state.Buttons = 0;  // discard init-burst garbage
 
-                    // Per-device button debounce (word-level): accept only after N
-                    // consecutive identical reports to reduce phantom press/release spikes.
+                    // Per-device button debounce (word-level): accept a new state only
+                    // after BUTTON_DEBOUNCE_REPORTS consecutive identical reports to
+                    // reduce phantom press/release spikes. For a newly seen device
+                    // (or just after warmup), the debounced state starts at 0; a held
+                    // button therefore takes one additional report to be adopted.
                     if (!buttonCandidate.TryGetValue(deviceId, out uint candidate) || candidate != state.Buttons)
                     {
                         buttonCandidate[deviceId] = state.Buttons;
@@ -778,9 +792,26 @@ namespace Joycon2PC.App
                 Invoke(() => Log("  Input mode → 0x3F (continuous full-rate)", ACCENT));
 
                 // ── Wait: stay here until all devices disconnect or user stops ─
-                while (!ct.IsCancellationRequested && scanner.GetKnownDeviceIds().Length > 0)
+                while (!ct.IsCancellationRequested)
                 {
                     try { await Task.Delay(250, ct); } catch { break; }
+
+                    int knownCount = scanner.GetKnownDeviceIds().Length;
+                    if (knownCount <= 0)
+                        break;
+
+                    var silence = DateTime.UtcNow - lastReportUtc;
+                    if (silence >= TimeSpan.FromSeconds(6))
+                    {
+                        Invoke(() =>
+                        {
+                            Log($"BLE link silent for {silence.TotalSeconds:F1}s with {knownCount} known device(s) — forcing reconnect.", YELLOW);
+                            _lblJoyconStatus.Text      = "Link silent — reconnecting…";
+                            _lblJoyconStatus.ForeColor = YELLOW;
+                        });
+                        scanner.DisconnectAll();
+                        break;
+                    }
                 }
 
                 if (ct.IsCancellationRequested) break;
@@ -800,6 +831,27 @@ namespace Joycon2PC.App
                 _lblJoyconStatus.Text      = "Stopped";
                 _lblJoyconStatus.ForeColor = TXT_DIM;
             });
+        }
+
+        private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+        {
+#if INTHEHAND
+            if (e.Mode != PowerModes.Resume || !_running || IsDisposed)
+                return;
+
+            try
+            {
+                BeginInvoke(() =>
+                {
+                    Log("System resume detected — auto reconnecting BLE...", YELLOW);
+                    OnReconnectClicked();
+                });
+            }
+            catch
+            {
+                // Ignore UI-thread race on shutdown.
+            }
+#endif
         }
 
         /// <summary>
@@ -1005,6 +1057,14 @@ namespace Joycon2PC.App
         }
 #endif
 
+        private static bool IsEnabledByEnv(string variableName)
+        {
+            string? raw = Environment.GetEnvironmentVariable(variableName);
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+            if (string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase)) return true;
+            return bool.TryParse(raw, out bool enabled) && enabled;
+        }
+
         // ══════════════════════════════════════════════════════════════════
         //  PARSER CALLBACK  (called from background thread)
         // ══════════════════════════════════════════════════════════════════
@@ -1125,6 +1185,11 @@ namespace Joycon2PC.App
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             _cts?.Cancel();
+            if (_powerEventsSubscribed)
+            {
+                SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+                _powerEventsSubscribed = false;
+            }
             _bridge?.Dispose();
             base.OnFormClosing(e);
         }
