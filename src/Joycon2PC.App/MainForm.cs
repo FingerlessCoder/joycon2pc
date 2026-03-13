@@ -1382,7 +1382,7 @@ namespace Joycon2PC.App
                 CircBtn(g, 376, 134, 13, "B", On("B"));
 
                 // Home button (between RS and C)
-                CircBtn(g, 315, 248, 12, "⌂", On("Home"));
+                CircBtn(g, 315, 248, 12, "Home", On("Home"));
 
                 // LED dots (4, vertical)
                 for (int i = 0; i < 4; i++)
