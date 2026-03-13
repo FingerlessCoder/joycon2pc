@@ -479,67 +479,50 @@ namespace Joycon2PC.App
                     }
                     lastRawBytes[deviceId] = (byte[])data.Clone();
 
-                    // ── Strip 0xA1 HID-over-GATT prefix if present ──────
-                    // BLE GATT notifications from a HID service prepend 0xA1
-                    // (ATT "Handle Value Notification" opcode for input reports).
-                    // All logical offsets below assume it has been removed.
-                    int off = (data.Length > 0 && data[0] == 0xA1) ? 1 : 0;
+                    if (!NS2InputReportDecoder.TryDecode(data, out var decoded))
+                        return;
 
-                    // Skip subcommand replies / too-short packets
-                    if (data.Length < off + 8) return;
-                    if (data[off + 0] == 0x21) return;   // subcommand reply
-
-                    // ── Parse input report ──────────────────────────────────
-                    var state = new JoyconState();
-                    state.Buttons = (uint)data[off + 4]
-                                  | ((uint)data[off + 5] << 8)
-                                  | ((uint)data[off + 6] << 16)
-                                  | ((uint)data[off + 7] << 24);
-
-                    if (data.Length >= off + 16)
+                    var state = new JoyconState
                     {
-                        int lx = data[off + 10] | ((data[off + 11] & 0x0F) << 8);
-                        int ly = (data[off + 11] >> 4) | (data[off + 12] << 4);
-                        int rx = data[off + 13] | ((data[off + 14] & 0x0F) << 8);
-                        int ry = (data[off + 14] >> 4) | (data[off + 15] << 4);
+                        Buttons = decoded.Buttons,
+                        LeftStickX = decoded.LeftStickX,
+                        LeftStickY = decoded.LeftStickY,
+                        RightStickX = decoded.RightStickX,
+                        RightStickY = decoded.RightStickY,
+                    };
 
-                        const int NS2_SENTINEL = 2047;
-                        state.LeftStickX  = (lx == 0 || lx == NS2_SENTINEL) ? 1998 : lx;
-                        state.LeftStickY  = (ly == 0 || ly == NS2_SENTINEL) ? 1998 : ly;
-                        state.RightStickX = (rx == 0 || rx == NS2_SENTINEL) ? 1998 : rx;
-                        state.RightStickY = (ry == 0 || ry == NS2_SENTINEL) ? 1998 : ry;
+                    // Detect L vs R from sentinel (runs every report — unconditional).
+                    // Joy-Con L: its right-stick slot is always 2047 (unused).
+                    // Joy-Con R: its left-stick slot is always 2047 (unused).
+                    bool lxSentinel = decoded.RawLeftStickX == NS2InputReportDecoder.SentinelStickValue
+                                   && decoded.RawLeftStickY == NS2InputReportDecoder.SentinelStickValue;
+                    bool rxSentinel = decoded.RawRightStickX == NS2InputReportDecoder.SentinelStickValue
+                                   && decoded.RawRightStickY == NS2InputReportDecoder.SentinelStickValue;
 
-                        // Detect L vs R from sentinel (runs every report — unconditional).
-                        // Joy-Con L: its right-stick slot is always 2047 (unused).
-                        // Joy-Con R: its left-stick slot is always 2047 (unused).
-                        bool lxSentinel = lx == NS2_SENTINEL && ly == NS2_SENTINEL;
-                        bool rxSentinel = rx == NS2_SENTINEL && ry == NS2_SENTINEL;
+                    // Persist raw sentinel flags so AssignDeviceIds Pass 3 can use them.
+                    // Use OR-assignment: once we've seen a sentinel it stays true.
+                    _deviceLStickSentinel[deviceId] = _deviceLStickSentinel.TryGetValue(deviceId, out var prevL) && prevL || lxSentinel;
+                    _deviceRStickSentinel[deviceId] = _deviceRStickSentinel.TryGetValue(deviceId, out var prevR) && prevR || rxSentinel;
 
-                        // Persist raw sentinel flags so AssignDeviceIds Pass 3 can use them.
-                        // Use OR-assignment: once we've seen a sentinel it stays true.
-                        _deviceLStickSentinel[deviceId] = _deviceLStickSentinel.TryGetValue(deviceId, out var prevL) && prevL || lxSentinel;
-                        _deviceRStickSentinel[deviceId] = _deviceRStickSentinel.TryGetValue(deviceId, out var prevR) && prevR || rxSentinel;
+                    if (rxSentinel)                 _leftDeviceId  = deviceId;  // R slot unused → L Joy-Con
+                    else if (lxSentinel)            _rightDeviceId = deviceId;  // L slot unused → R Joy-Con
+                    else
+                    {
+                        if (_leftDeviceId  == null) _leftDeviceId  = deviceId;
+                        if (_rightDeviceId == null) _rightDeviceId = deviceId;
+                    }
 
-                        if (rxSentinel)                 _leftDeviceId  = deviceId;  // R slot unused → L Joy-Con
-                        else if (lxSentinel)            _rightDeviceId = deviceId;  // L slot unused → R Joy-Con
-                        else
-                        {
-                            if (_leftDeviceId  == null) _leftDeviceId  = deviceId;
-                            if (_rightDeviceId == null) _rightDeviceId = deviceId;
-                        }
-
-                        // Log ONCE per device — exactly when dump count reaches 3
-                        dumpCounts.TryGetValue(deviceId, out int dc);
-                        if (dc == 3 && !stickLoggedDevices.Contains(deviceId)) // fire exactly once
-                        {
-                            string sideTag = deviceId == _leftDeviceId ? "L" : deviceId == _rightDeviceId ? "R" : "?";
-                            int lxC = state.LeftStickX, lyC = state.LeftStickY;
-                            int rxC = state.RightStickX, ryC = state.RightStickY;
-                            try { BeginInvoke(() => Log(
-                                $"STICK[{shortId}]({sideTag}) LX={lxC} LY={lyC} RX={rxC} RY={ryC}",
-                                Color.FromArgb(100, 200, 255))); } catch { }
-                            stickLoggedDevices.Add(deviceId);  // never fire again for this device
-                        }
+                    // Log ONCE per device — exactly when dump count reaches 3
+                    dumpCounts.TryGetValue(deviceId, out int dc);
+                    if (dc == 3 && !stickLoggedDevices.Contains(deviceId)) // fire exactly once
+                    {
+                        string sideTag = deviceId == _leftDeviceId ? "L" : deviceId == _rightDeviceId ? "R" : "?";
+                        int lxC = state.LeftStickX, lyC = state.LeftStickY;
+                        int rxC = state.RightStickX, ryC = state.RightStickY;
+                        try { BeginInvoke(() => Log(
+                            $"STICK[{shortId}]({sideTag}) LX={lxC} LY={lyC} RX={rxC} RY={ryC}",
+                            Color.FromArgb(100, 200, 255))); } catch { }
+                        stickLoggedDevices.Add(deviceId);  // never fire again for this device
                     }
 
                     // ── Warmup gate: suppress buttons until controller has settled ──
