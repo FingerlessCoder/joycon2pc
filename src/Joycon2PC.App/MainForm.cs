@@ -724,18 +724,8 @@ namespace Joycon2PC.App
                 // Wait longer so the controller finishes its BLE init handshake.
                 // The LED blink stops once the controller accepts the mode command;
                 // sending it too early (< 400 ms after GATT subscribe) is ignored.
-                try { await Task.Delay(500, ct); } catch { break; }
-                foreach (var id in sortedIds)
-                {
-                    try
-                    {
-                        var modeCmd = Joycon2PC.Core.SubcommandBuilder.BuildNS2SetInputMode(0x3F);
-                        await scanner.SendSubcommandAsync(id, modeCmd);
-                        await Task.Delay(60);
-                    }
-                    catch { /* non-fatal — controller still works in default mode */ }
-                }
-                Invoke(() => Log("  Input mode → 0x3F (continuous full-rate)", ACCENT));
+                try { await Task.Delay(300, ct); } catch { break; }
+                await ConfigureContinuousInputModeAsync(scanner, sortedIds, ct);
 
                 // ── Wait: stay here until all devices disconnect or user stops ─
                 while (!ct.IsCancellationRequested && scanner.GetKnownDeviceIds().Length > 0)
@@ -839,6 +829,47 @@ namespace Joycon2PC.App
 
             _leftDeviceId  = newLeft;
             _rightDeviceId = newRight;
+        }
+
+        private async Task ConfigureContinuousInputModeAsync(BLEScanner scanner, string[] deviceIds, CancellationToken ct)
+        {
+            const byte mode = 0x3F;
+            const int attempts = 3;
+            const int retryDelayMs = 80;
+
+            foreach (var id in deviceIds)
+            {
+                bool success = false;
+                for (int attempt = 1; attempt <= attempts && !ct.IsCancellationRequested; attempt++)
+                {
+                    try
+                    {
+                        var modeCmd = Joycon2PC.Core.SubcommandBuilder.BuildNS2SetInputMode(mode);
+                        success = await scanner.SendSubcommandAsync(id, modeCmd, ct);
+                    }
+                    catch
+                    {
+                        success = false;
+                    }
+
+                    if (success)
+                    {
+                        string shortId = id[..Math.Min(8, id.Length)];
+                        int a = attempt;
+                        Invoke(() => Log($"  Input mode 0x{mode:X2} -> {shortId} (attempt {a}/{attempts})", ACCENT));
+                        break;
+                    }
+
+                    try { await Task.Delay(retryDelayMs, ct); }
+                    catch { return; }
+                }
+
+                if (!success)
+                {
+                    string shortId = id[..Math.Min(8, id.Length)];
+                    Invoke(() => Log($"  Input mode 0x{mode:X2} failed for {shortId}; fallback to default mode", YELLOW));
+                }
+            }
         }
 
         /// <summary>
