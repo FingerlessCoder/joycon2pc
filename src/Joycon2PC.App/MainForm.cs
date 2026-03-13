@@ -14,18 +14,25 @@ namespace Joycon2PC.App
     public sealed class MainForm : Form
     {
         // ── theme colours ──────────────────────────────────────────────────
-        private static readonly Color BG       = Color.FromArgb(28,  28,  35);
-        private static readonly Color PANEL    = Color.FromArgb(38,  38,  50);
-        private static readonly Color ACCENT   = Color.FromArgb(99,  179, 237);
-        private static readonly Color GREEN    = Color.FromArgb(72,  199, 116);
-        private static readonly Color RED      = Color.FromArgb(252, 92,  101);
-        private static readonly Color YELLOW   = Color.FromArgb(255, 200, 80);
-        private static readonly Color TXT      = Color.FromArgb(220, 220, 230);
-        private static readonly Color TXT_DIM  = Color.FromArgb(130, 130, 150);
-        private static readonly Font  FONT_LG  = new("Segoe UI", 11f, FontStyle.Regular);
-        private static readonly Font  FONT_MD  = new("Segoe UI", 9f,  FontStyle.Regular);
-        private static readonly Font  FONT_SM  = new("Segoe UI", 8f,  FontStyle.Regular);
-        private static readonly Font  FONT_BOLD= new("Segoe UI", 9f,  FontStyle.Bold);
+        private static readonly Color BG            = Color.FromArgb(241, 245, 250);
+        private static readonly Color PANEL         = Color.FromArgb(255, 255, 255);
+        private static readonly Color PANEL_ALT     = Color.FromArgb(247, 250, 253);
+        private static readonly Color ACCENT        = Color.FromArgb(0, 108, 126);
+        private static readonly Color GREEN         = Color.FromArgb(41, 152, 100);
+        private static readonly Color RED           = Color.FromArgb(196, 76, 62);
+        private static readonly Color YELLOW        = Color.FromArgb(206, 137, 35);
+        private static readonly Color TXT           = Color.FromArgb(32, 44, 58);
+        private static readonly Color TXT_DIM       = Color.FromArgb(111, 125, 141);
+        private static readonly Color BORDER        = Color.FromArgb(212, 221, 232);
+        private static readonly Color BTN_PRIMARY   = Color.FromArgb(0, 120, 148);
+        private static readonly Color BTN_STOP      = Color.FromArgb(192, 74, 60);
+        private static readonly Color BTN_SECONDARY = Color.FromArgb(233, 240, 247);
+        private static readonly Color STICK_BG      = Color.FromArgb(245, 249, 253);
+        private static readonly Color INACTIVE_BTN  = Color.FromArgb(227, 234, 241);
+        private static readonly Font  FONT_LG       = new("Bahnschrift", 11f, FontStyle.Regular);
+        private static readonly Font  FONT_MD       = new("Bahnschrift", 9f, FontStyle.Regular);
+        private static readonly Font  FONT_SM       = new("Bahnschrift", 8f, FontStyle.Regular);
+        private static readonly Font  FONT_BOLD     = new("Bahnschrift", 9f, FontStyle.Bold);
 
         // ── runtime state ──────────────────────────────────────────────────
         private JoyconState _lastState = new();
@@ -64,8 +71,8 @@ namespace Joycon2PC.App
         private void InitUI()
         {
             Text            = "Joycon2PC";
-            Size            = new Size(820, 660);
-            MinimumSize     = new Size(780, 600);
+            ClientSize      = new Size(996, 720);
+            MinimumSize     = new Size(980, 720);
             BackColor       = BG;
             ForeColor       = TXT;
             Font            = FONT_MD;
@@ -73,171 +80,224 @@ namespace Joycon2PC.App
             FormBorderStyle = FormBorderStyle.Sizable;
 
             // ── title bar area ────────────────────────────────────────────
-            var lblTitle = MakeLabel("🎮  Joycon2PC", 16, new Point(16, 12), bold: true, color: ACCENT);
+            var lblTitle = MakeLabel("Joycon2PC", 21, new Point(18, 12), bold: true, color: ACCENT);
             lblTitle.AutoSize = true;
             Controls.Add(lblTitle);
+
+            var lblSubtitle = MakeLabel("Joy-Con 2 to virtual Xbox controller bridge", 9, new Point(20, 46), color: TXT_DIM);
+            lblSubtitle.AutoSize = true;
+            Controls.Add(lblSubtitle);
 
             // ── status row ────────────────────────────────────────────────
             var statusPanel = new Panel
             {
                 BackColor = PANEL,
-                Bounds    = new Rectangle(12, 48, 790, 52),
+                Bounds    = new Rectangle(14, 66, 968, 92),
                 Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                BorderStyle = BorderStyle.FixedSingle,
             };
             Controls.Add(statusPanel);
 
-            statusPanel.Controls.Add(MakeLabel("ViGEm (virtual gamepad):", 9,  new Point(12, 8),  bold: true));
-            _lblVigemStatus = MakeLabel("Not checked", 9, new Point(186, 8), color: YELLOW);
-            statusPanel.Controls.Add(_lblVigemStatus);
+            statusPanel.Controls.Add(MakeLabel("System Status", 10, new Point(12, 8), bold: true, color: ACCENT));
 
-            statusPanel.Controls.Add(MakeLabel("Joy-Con:", 9, new Point(12, 30), bold: true));
-            _lblJoyconStatus = MakeLabel("Not connected", 9, new Point(186, 30), color: TXT_DIM);
-            statusPanel.Controls.Add(_lblJoyconStatus);
+            var leftStatusCard = new Panel
+            {
+                BackColor = PANEL_ALT,
+                Bounds = new Rectangle(12, 30, 468, 50),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                BorderStyle = BorderStyle.FixedSingle,
+            };
+            statusPanel.Controls.Add(leftStatusCard);
 
-            var hintViGEm = MakeLabel("Need to install ViGEmBus driver first — see help below", 8, new Point(380, 8), color: TXT_DIM);
-            hintViGEm.AutoSize = true;
-            statusPanel.Controls.Add(hintViGEm);
+            leftStatusCard.Controls.Add(MakeLabel("ViGEm Driver", 9, new Point(10, 6), bold: true));
+            _lblVigemStatus = MakeLabel("Not checked", 9, new Point(10, 25), color: YELLOW);
+            leftStatusCard.Controls.Add(_lblVigemStatus);
+            leftStatusCard.Controls.Add(MakeLabel("Install ViGEmBus if unavailable", 8, new Point(168, 25), color: TXT_DIM));
 
-            var hintJoyCon = MakeLabel("Pair Joy-Con in Windows Bluetooth Settings first", 8, new Point(380, 30), color: TXT_DIM);
-            hintJoyCon.AutoSize = true;
-            statusPanel.Controls.Add(hintJoyCon);
+            var rightStatusCard = new Panel
+            {
+                BackColor = PANEL_ALT,
+                Bounds = new Rectangle(486, 30, 468, 50),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                BorderStyle = BorderStyle.FixedSingle,
+            };
+            statusPanel.Controls.Add(rightStatusCard);
 
-            // ── button panel (left half, below status) ────────────────────
+            rightStatusCard.Controls.Add(MakeLabel("Joy-Con Link", 9, new Point(10, 6), bold: true));
+            _lblJoyconStatus = MakeLabel("Not connected", 9, new Point(10, 25), color: TXT_DIM);
+            rightStatusCard.Controls.Add(_lblJoyconStatus);
+            rightStatusCard.Controls.Add(MakeLabel("Pair in Windows Bluetooth settings", 8, new Point(168, 25), color: TXT_DIM));
+
+            // ── main content area ─────────────────────────────────────────
+            var contentGrid = new TableLayoutPanel
+            {
+                Bounds = new Rectangle(14, 170, 968, 344),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                BackColor = Color.Transparent,
+                ColumnCount = 2,
+                RowCount = 1,
+            };
+            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 432f));
+            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            contentGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            Controls.Add(contentGrid);
+
+            // ── button panel (left column) ────────────────────────────────
             var pnlLeft = new Panel
             {
                 BackColor = PANEL,
-                Bounds    = new Rectangle(12, 110, 390, 310),
-                Anchor    = AnchorStyles.Top | AnchorStyles.Left,
+                Dock = DockStyle.Fill,
+                BorderStyle = BorderStyle.FixedSingle,
+                Margin = new Padding(0, 0, 10, 0),
             };
-            Controls.Add(pnlLeft);
-            pnlLeft.Controls.Add(MakeLabel("Controller Inputs", 9, new Point(8, 6), bold: true, color: ACCENT));
+            contentGrid.Controls.Add(pnlLeft, 0, 0);
+
+            pnlLeft.Controls.Add(MakeLabel("Controller Inputs", 10, new Point(10, 8), bold: true, color: ACCENT));
 
             // ── Joy-Con 2 physical layout — L half | R half ──────────────
             // Vertical divider between the two halves
             pnlLeft.Controls.Add(new Panel
             {
-                BackColor = Color.FromArgb(55, 55, 75),
-                Bounds    = new Rectangle(193, 6, 1, 295),
+                BackColor = BORDER,
+                Bounds    = new Rectangle(213, 8, 1, 324),
             });
 
             // ══ L Joy-Con half (x: 0–192) ═══════════════════════════════
-            pnlLeft.Controls.Add(MakeLabel("← L Joy-Con", 7.5f, new Point(6, 5), bold: true, color: ACCENT));
+            pnlLeft.Controls.Add(MakeLabel("L Joy-Con", 8, new Point(10, 34), bold: true, color: ACCENT));
 
             // Shoulder row (top-to-bottom on physical controller): ZL · L
-            AddButtonIndicator(pnlLeft, "ZL",  new Point(6,  23), YELLOW);
-            AddButtonIndicator(pnlLeft, "L",   new Point(30, 23));
+            AddButtonIndicator(pnlLeft, "ZL",  new Point(10, 56), YELLOW);
+            AddButtonIndicator(pnlLeft, "L",   new Point(34, 56));
 
             // Menu row: − (Minus) · LS (stick click)
-            AddButtonIndicator(pnlLeft, "-",   new Point(6,  47));
-            AddButtonIndicator(pnlLeft, "LS",  new Point(30, 47), Color.FromArgb(120, 180, 255));
+            AddButtonIndicator(pnlLeft, "-",   new Point(10, 80));
+            AddButtonIndicator(pnlLeft, "LS",  new Point(34, 80), Color.FromArgb(70, 146, 196));
 
             // Left stick visualiser
-            _pnlLStick = MakeStickPanel(new Point(14, 70));
+            _pnlLStick = MakeStickPanel(new Point(18, 106));
             pnlLeft.Controls.Add(_pnlLStick);
-            pnlLeft.Controls.Add(MakeLabel("L Stick", 7, new Point(26, 154), color: TXT_DIM));
+            pnlLeft.Controls.Add(MakeLabel("L Stick", 7, new Point(28, 190), color: TXT_DIM));
 
             // D-pad cross
-            AddButtonIndicator(pnlLeft, "Up", new Point(50, 174));
-            AddButtonIndicator(pnlLeft, "Lt", new Point(28, 196));
-            AddButtonIndicator(pnlLeft, "Dn", new Point(50, 218));
-            AddButtonIndicator(pnlLeft, "Rt", new Point(72, 196));
+            AddButtonIndicator(pnlLeft, "Up", new Point(54, 214));
+            AddButtonIndicator(pnlLeft, "Lt", new Point(32, 236));
+            AddButtonIndicator(pnlLeft, "Dn", new Point(54, 258));
+            AddButtonIndicator(pnlLeft, "Rt", new Point(76, 236));
 
             // ══ R Joy-Con half (x: 196–388) ══════════════════════════════
-            const int rx = 196;
-            pnlLeft.Controls.Add(MakeLabel("R Joy-Con →", 7.5f, new Point(rx + 4, 5), bold: true, color: ACCENT));
+            const int rx = 220;
+            pnlLeft.Controls.Add(MakeLabel("R Joy-Con", 8, new Point(rx + 6, 34), bold: true, color: ACCENT));
 
             // Shoulder row: ZR · C (new JC2 button) · R
-            AddButtonIndicator(pnlLeft, "ZR", new Point(rx + 4,  23), YELLOW);
-            AddButtonIndicator(pnlLeft, "C",  new Point(rx + 28, 23), Color.FromArgb(255, 160, 30));
-            AddButtonIndicator(pnlLeft, "R",  new Point(rx + 52, 23));
+            AddButtonIndicator(pnlLeft, "ZR", new Point(rx + 6, 56), YELLOW);
+            AddButtonIndicator(pnlLeft, "C",  new Point(rx + 30, 56), Color.FromArgb(220, 135, 34));
+            AddButtonIndicator(pnlLeft, "R",  new Point(rx + 54, 56));
 
             // Menu row: + (Plus) · Home · Cap (screenshot)
-            AddButtonIndicator(pnlLeft, "+",    new Point(rx + 4,  47));
-            AddButtonIndicator(pnlLeft, "Home", new Point(rx + 28, 47), ACCENT);
-            AddButtonIndicator(pnlLeft, "Cap",  new Point(rx + 52, 47), Color.FromArgb(180, 100, 220));
+            AddButtonIndicator(pnlLeft, "+",    new Point(rx + 6,  80));
+            AddButtonIndicator(pnlLeft, "Home", new Point(rx + 30, 80), ACCENT);
+            AddButtonIndicator(pnlLeft, "Cap",  new Point(rx + 54, 80), Color.FromArgb(190, 97, 86));
 
             // Right stick visualiser
-            _pnlRStick = MakeStickPanel(new Point(rx + 4, 70));
+            _pnlRStick = MakeStickPanel(new Point(rx + 6, 106));
             pnlLeft.Controls.Add(_pnlRStick);
-            pnlLeft.Controls.Add(MakeLabel("R Stick", 7, new Point(rx + 16, 154), color: TXT_DIM));
+            pnlLeft.Controls.Add(MakeLabel("R Stick", 7, new Point(rx + 18, 190), color: TXT_DIM));
 
             // RS (stick click)
-            AddButtonIndicator(pnlLeft, "RS",  new Point(rx + 52, 154), Color.FromArgb(120, 180, 255));
+            AddButtonIndicator(pnlLeft, "RS",  new Point(rx + 54, 190), Color.FromArgb(70, 146, 196));
 
             // ABXY face buttons (diamond): X=top, Y=left, A=right, B=bottom
-            AddButtonIndicator(pnlLeft, "X", new Point(rx + 136, 174));
-            AddButtonIndicator(pnlLeft, "Y", new Point(rx + 112, 196));
-            AddButtonIndicator(pnlLeft, "A", new Point(rx + 160, 196));
-            AddButtonIndicator(pnlLeft, "B", new Point(rx + 136, 218));
+            AddButtonIndicator(pnlLeft, "X", new Point(rx + 140, 214));
+            AddButtonIndicator(pnlLeft, "Y", new Point(rx + 116, 236));
+            AddButtonIndicator(pnlLeft, "A", new Point(rx + 164, 236));
+            AddButtonIndicator(pnlLeft, "B", new Point(rx + 140, 258));
 
-            // ── log panel (right half) ────────────────────────────────────
+            // ── log panel (right column) ──────────────────────────────────
+            var logCard = new Panel
+            {
+                BackColor = PANEL,
+                Dock = DockStyle.Fill,
+                BorderStyle = BorderStyle.FixedSingle,
+                Margin = new Padding(0),
+                Padding = new Padding(10, 34, 10, 10),
+            };
+            contentGrid.Controls.Add(logCard, 1, 0);
+
+            var logLabel = MakeLabel("Log", 10, new Point(10, 8), bold: true, color: ACCENT);
+            logLabel.AutoSize = true;
+            logCard.Controls.Add(logLabel);
+
             _log = new RichTextBox
             {
-                BackColor   = Color.FromArgb(20, 20, 28),
+                BackColor   = PANEL_ALT,
                 ForeColor   = TXT,
-                Font        = new Font("Consolas", 8.5f),
+                Font        = new Font("Cascadia Mono", 9f),
                 ReadOnly    = true,
                 ScrollBars  = RichTextBoxScrollBars.Vertical,
                 BorderStyle = BorderStyle.None,
-                Bounds      = new Rectangle(414, 110, 388, 310),
-                Anchor      = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Dock        = DockStyle.Fill,
                 WordWrap    = false,
             };
-            Controls.Add(_log);
-            var logLabel = MakeLabel("Log", 9, new Point(414, 94), bold: true, color: ACCENT);
-            logLabel.AutoSize = true;
-            Controls.Add(logLabel);
+            logCard.Controls.Add(_log);
 
             // ── action buttons ────────────────────────────────────────────
+            var actionPanel = new Panel
+            {
+                Bounds = new Rectangle(14, 526, 968, 56),
+                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+                BackColor = Color.Transparent,
+            };
+            Controls.Add(actionPanel);
+
             _btnStart = new Button
             {
-                Text      = "▶  Start (Scan for Joy-Con)",
-                BackColor = Color.FromArgb(50, 120, 80),
+                Text      = "Start Scan",
+                BackColor = BTN_PRIMARY,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font      = new Font("Segoe UI", 11f, FontStyle.Bold),
-                Bounds    = new Rectangle(12, 430, 240, 48),
+                Font      = new Font("Bahnschrift", 11f, FontStyle.Bold),
+                Bounds    = new Rectangle(0, 0, 320, 56),
                 Anchor    = AnchorStyles.Bottom | AnchorStyles.Left,
                 Cursor    = Cursors.Hand,
             };
             _btnStart.FlatAppearance.BorderSize = 0;
             _btnStart.Click += OnStartClicked;
-            Controls.Add(_btnStart);
+            actionPanel.Controls.Add(_btnStart);
 
             _btnReconnect = new Button
             {
-                Text      = "🔄  Reconnect",
-                BackColor = Color.FromArgb(80, 60, 20),
+                Text      = "Reconnect",
+                BackColor = BTN_SECONDARY,
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font      = FONT_MD,
-                Bounds    = new Rectangle(418, 430, 140, 48),
+                Bounds    = new Rectangle(334, 0, 180, 56),
                 Anchor    = AnchorStyles.Bottom | AnchorStyles.Left,
                 Cursor    = Cursors.Hand,
             };
-            _btnReconnect.FlatAppearance.BorderSize = 0;
+            _btnReconnect.FlatAppearance.BorderSize = 1;
+            _btnReconnect.FlatAppearance.BorderColor = BORDER;
             _btnReconnect.Click += (s, e) => OnReconnectClicked();
-            Controls.Add(_btnReconnect);
+            actionPanel.Controls.Add(_btnReconnect);
 
             // ── help / instruction panel ──────────────────────────────────
             var helpBox = new RichTextBox
             {
-                BackColor   = Color.FromArgb(24, 24, 32),
+                BackColor   = PANEL,
                 ForeColor   = TXT_DIM,
                 Font        = FONT_SM,
                 ReadOnly    = true,
-                BorderStyle = BorderStyle.None,
+                BorderStyle = BorderStyle.FixedSingle,
                 ScrollBars  = RichTextBoxScrollBars.Vertical,
-                Bounds      = new Rectangle(12, 490, 790, 130),
+                Bounds      = new Rectangle(14, 594, 968, 112),
                 Anchor      = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
             };
             helpBox.Text =
-                "QUICK START — HOW TO USE\r\n" +
-                "────────────────────────────────────────────\r\n" +
-                "  Step 1 — Install ViGEmBus driver:  https://github.com/nefarius/ViGEmBus/releases  (run the installer)\r\n" +
-                "  Step 2 — Pair your Joy-Con: Windows Settings → Bluetooth → Add device → choose your Joy-Con 2\r\n" +
-                "  Step 3 — Press ▶ Start — the app will scan, connect, and map inputs to a virtual Xbox controller.\r\n\r\n" +
-                "NOTE: ViGEmBus must be installed for the virtual controller to work.";
+                "Quick Start\r\n" +
+                "1) Install ViGEmBus driver: https://github.com/nefarius/ViGEmBus/releases\r\n" +
+                "2) Pair Joy-Con in Windows Settings -> Bluetooth -> Add device\r\n" +
+                "3) Click Start Scan to connect and map inputs to virtual Xbox controller\r\n\r\n" +
+                "Tip: If pairing gets stale, click Reconnect to clear BLE state and retry.";
             Controls.Add(helpBox);
 
             // kick off ViGEm check
@@ -262,7 +322,8 @@ namespace Joycon2PC.App
         {
             Size      = new Size(84, 84),
             Location  = loc,
-            BackColor = Color.FromArgb(22, 22, 30),
+            BackColor = STICK_BG,
+            BorderStyle = BorderStyle.FixedSingle,
         };
 
         private void AddButtonIndicator(Control parent, string name, Point loc, Color? onColor = null)
@@ -271,7 +332,8 @@ namespace Joycon2PC.App
             {
                 Size      = new Size(20, 20),
                 Location  = loc,
-                BackColor = Color.FromArgb(50, 50, 65),
+                BackColor = INACTIVE_BTN,
+                BorderStyle = BorderStyle.FixedSingle,
             };
             var lbl = new Label
             {
@@ -386,8 +448,8 @@ namespace Joycon2PC.App
         {
             _running = true;
             _cts     = new CancellationTokenSource();
-            _btnStart.Text      = "⏹  Stop";
-            _btnStart.BackColor = Color.FromArgb(140, 50, 50);
+            _btnStart.Text      = "Stop";
+            _btnStart.BackColor = BTN_STOP;
 
             // Attach parser → bridge
             _parser.StateChanged -= OnStateChanged;
@@ -409,9 +471,9 @@ namespace Joycon2PC.App
         {
             _cts?.Cancel();
             _running = false;
-            _btnStart.Text      = "▶  Start (Scan for Joy-Con)";
-            _btnStart.BackColor = Color.FromArgb(50, 120, 80);
-            _btnReconnect.BackColor = Color.FromArgb(80, 60, 20);
+            _btnStart.Text      = "Start Scan";
+            _btnStart.BackColor = BTN_PRIMARY;
+            _btnReconnect.BackColor = BTN_SECONDARY;
             _lblJoyconStatus.Text      = "Stopped";
             _lblJoyconStatus.ForeColor = TXT_DIM;
             Log("Stopped.", TXT_DIM);
@@ -1134,7 +1196,7 @@ namespace Joycon2PC.App
         {
             if (!_btnIndicators.TryGetValue(name, out var p)) return;
             var onColor = (Color)(p.Tag ?? GREEN);
-            p.BackColor = pressed ? onColor : Color.FromArgb(50, 50, 65);
+            p.BackColor = pressed ? onColor : INACTIVE_BTN;
             if (p.Controls.Count > 0)
                 ((Label)p.Controls[0]).ForeColor = pressed ? Color.White : TXT_DIM;
         }
@@ -1149,16 +1211,16 @@ namespace Joycon2PC.App
 
             var bmp = new Bitmap(panel.Width, panel.Height);
             using var g   = Graphics.FromImage(bmp);
-            g.Clear(Color.FromArgb(22, 22, 30));
+            g.Clear(STICK_BG);
 
             // outer ring
-            g.DrawEllipse(new Pen(Color.FromArgb(70, 70, 90), 1),
+            g.DrawEllipse(new Pen(BORDER, 1),
                 1, 1, panel.Width - 3, panel.Height - 3);
 
             // centre crosshair
-            g.DrawLine(new Pen(Color.FromArgb(50, 50, 70), 1),
+            g.DrawLine(new Pen(Color.FromArgb(201, 211, 222), 1),
                 panel.Width / 2, 0, panel.Width / 2, panel.Height);
-            g.DrawLine(new Pen(Color.FromArgb(50, 50, 70), 1),
+            g.DrawLine(new Pen(Color.FromArgb(201, 211, 222), 1),
                 0, panel.Height / 2, panel.Width, panel.Height / 2);
 
             // dot
@@ -1183,7 +1245,7 @@ namespace Joycon2PC.App
             string time = DateTime.Now.ToString("HH:mm:ss");
             _log.SelectionStart  = _log.TextLength;
             _log.SelectionLength = 0;
-            _log.SelectionColor  = Color.FromArgb(70, 70, 90);
+            _log.SelectionColor  = TXT_DIM;
             _log.AppendText($"[{time}] ");
             _log.SelectionColor  = color ?? TXT;
             _log.AppendText(text + "\n");
