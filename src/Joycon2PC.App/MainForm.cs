@@ -104,7 +104,7 @@ namespace Joycon2PC.App
             {
                 BackColor = PANEL_ALT,
                 Bounds = new Rectangle(12, 30, 468, 50),
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
                 BorderStyle = BorderStyle.FixedSingle,
             };
             statusPanel.Controls.Add(leftStatusCard);
@@ -118,7 +118,7 @@ namespace Joycon2PC.App
             {
                 BackColor = PANEL_ALT,
                 Bounds = new Rectangle(486, 30, 468, 50),
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 BorderStyle = BorderStyle.FixedSingle,
             };
             statusPanel.Controls.Add(rightStatusCard);
@@ -127,6 +127,28 @@ namespace Joycon2PC.App
             _lblJoyconStatus = MakeLabel("Not connected", 9, new Point(10, 25), color: TXT_DIM);
             rightStatusCard.Controls.Add(_lblJoyconStatus);
             rightStatusCard.Controls.Add(MakeLabel("Pair in Windows Bluetooth settings", 8, new Point(168, 25), color: TXT_DIM));
+
+            void LayoutStatusCards()
+            {
+                const int margin = 12;
+                const int gap = 12;
+                const int top = 30;
+                const int height = 50;
+
+                int availableWidth = statusPanel.ClientSize.Width - (margin * 2) - gap;
+                if (availableWidth < 2 * 100)
+                {
+                    // Ensure a reasonable minimum width for each card.
+                    availableWidth = 2 * 100;
+                }
+
+                int cardWidth = availableWidth / 2;
+                leftStatusCard.Bounds = new Rectangle(margin, top, cardWidth, height);
+                rightStatusCard.Bounds = new Rectangle(margin + cardWidth + gap, top, cardWidth, height);
+            }
+
+            statusPanel.Resize += (sender, args) => LayoutStatusCards();
+            LayoutStatusCards();
 
             // ── main content area ─────────────────────────────────────────
             var contentGrid = new TableLayoutPanel
