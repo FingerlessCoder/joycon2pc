@@ -1111,7 +1111,8 @@ namespace Joycon2PC.App
                     RefreshDeviceTargetOptions(scanner);
                 });
 
-                var sortedIds = SortDeviceIdsForPlayerOrder(scanner, ids);
+                var activeIds = GetActiveDeviceIdsForConnectMode(ids);
+                var sortedIds = SortDeviceIdsForPlayerOrder(scanner, activeIds);
                 DevLog("Connect flow: joycon2cpp-style init -> input mode -> LED -> sound", TXT_DIM);
 
                 // ── Post-connect init: switch to continuous full-rate reporting ─
@@ -1272,6 +1273,14 @@ namespace Joycon2PC.App
 
         private void AssignSingleModeDeviceIds(BLEScanner scanner, string[] ids)
         {
+            string? preferred = _connectMode == ConnectMode.SingleLeft ? _leftDeviceId : _rightDeviceId;
+            if (!string.IsNullOrWhiteSpace(preferred) && ids.Any(id => string.Equals(id, preferred, StringComparison.OrdinalIgnoreCase)))
+            {
+                _leftDeviceId = preferred;
+                _rightDeviceId = preferred;
+                return;
+            }
+
             string? leftCandidate = null;
             string? rightCandidate = null;
 
@@ -1300,6 +1309,27 @@ namespace Joycon2PC.App
 
             _leftDeviceId = chosen;
             _rightDeviceId = chosen;
+        }
+
+        private string[] GetActiveDeviceIdsForConnectMode(string[] knownIds)
+        {
+            if (knownIds.Length == 0)
+                return knownIds;
+
+            if (_connectMode == ConnectMode.AutoPair)
+                return knownIds;
+
+            string? chosenId = _connectMode == ConnectMode.SingleLeft ? _leftDeviceId : _rightDeviceId;
+            if (string.IsNullOrWhiteSpace(chosenId))
+                return new[] { knownIds[0] };
+
+            foreach (var id in knownIds)
+            {
+                if (string.Equals(id, chosenId, StringComparison.OrdinalIgnoreCase))
+                    return new[] { id };
+            }
+
+            return new[] { knownIds[0] };
         }
 
         private readonly struct InputModeInitProfile
