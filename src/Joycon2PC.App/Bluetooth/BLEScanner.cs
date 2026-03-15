@@ -20,7 +20,7 @@ namespace Joycon2PC.App.Bluetooth
     // Filters to the Nintendo custom BLE service and subscribes only to the
     // NS2 input characteristic. Also reads PnP ID for L/R identification.
 
-    // â”€â”€ NS2 GATT UUIDs (from Nohzockt/Switch2-Controllers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // NS2 GATT UUIDs (from Nohzockt/Switch2-Controllers)
     private const string NS2_SERVICE_UUID = "ab7de9be-89fe-49ad-828f-118f09df7fd0";
     private const string NS2_INPUT_UUID   = "ab7de9be-89fe-49ad-828f-118f09df7fd2"; // notify
     private const string NS2_OUTPUT_UUID  = "649d4ac9-8eb7-4e6c-af44-1ea54fe5f005"; // write, matches joycon2cpp
@@ -142,12 +142,12 @@ namespace Joycon2PC.App.Bluetooth
         {
             Console.WriteLine("InTheHand NS2 scan: checking paired devices first, then active scan...");
 
-            // â”€â”€ Step 1: already-paired devices (no advertising needed) â”€â”€â”€â”€
+            // Step 1: already-paired devices (no advertising needed)
             // This finds Joy-Con 2 controllers that are already bonded to Windows.
             // They don't advertise after pairing, so ScanForDevicesAsync misses them.
-            // â”€â”€ Step 1: already-paired devices â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // Step 1: already-paired devices
             // This finds both "Joy-Con 2 (L)" and "Joy-Con 2 (R)" that Windows already knows.
-            // Connect ALL of them â€” do NOT bail early after the first one.
+            // Connect ALL of them - do NOT bail early after the first one.
             var paired = await InTheHand.Bluetooth.Bluetooth.GetPairedDevicesAsync();
             Console.WriteLine($"[Paired] Found {paired.Count()} paired device(s)");
             foreach (var dev in paired)
@@ -160,14 +160,14 @@ namespace Joycon2PC.App.Bluetooth
 
             if (_writableCharacteristics.Count >= 2)
             {
-                Console.WriteLine($"Both controllers found from paired list â€” skipping active scan.");
+                Console.WriteLine($"Both controllers found from paired list - skipping active scan.");
                 return;
             }
 
-            // â”€â”€ Step 2: active scan (for advertising / newly-pairing devices) â”€
+            // Step 2: active scan (for advertising / newly-pairing devices)
             Console.WriteLine(_writableCharacteristics.Count == 1
-                ? "Found 1 controller â€” scanning for the other oneâ€¦"
-                : "No paired controllers found â€” starting active scanâ€¦");
+                ? "Found 1 controller - scanning for the other one..."
+                : "No paired controllers found - starting active scan...");
             var scanOptions = new RequestDeviceOptions { AcceptAllDevices = true };
             var devices = await InTheHand.Bluetooth.Bluetooth.ScanForDevicesAsync(scanOptions, cancellationToken);
             foreach (var dev in devices)
@@ -224,7 +224,7 @@ namespace Joycon2PC.App.Bluetooth
 
             var services = await dev.Gatt.GetPrimaryServicesAsync();
 
-            // â”€â”€ Read PnP ID to identify L vs R â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // Read PnP ID to identify L vs R
             try
             {
                 foreach (var svc in services)
@@ -252,7 +252,7 @@ namespace Joycon2PC.App.Bluetooth
                 Console.WriteLine($"    PnP ID read failed (non-fatal): {ex.Message}");
             }
 
-            // â”€â”€ Subscribe to NS2 service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // Subscribe to NS2 service
             bool foundNS2 = false;
             bool subscribedInput = false;
             foreach (var svc in services)
@@ -267,10 +267,10 @@ namespace Joycon2PC.App.Bluetooth
                 }
 
                 foundNS2 = true;
-                Console.WriteLine("    â˜… NS2 service found!");
+                Console.WriteLine("    * NS2 service found!");
                 var chars = await svc.GetCharacteristicsAsync();
 
-                // â”€â”€ Pass 1: register OUTPUT (writable) first â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                // Pass 1: register OUTPUT (writable) first
                 // We must have the writable characteristic registered BEFORE
                 // we subscribe to INPUT notifications, so the SPI calibration
                 // init can be sent immediately after StartNotificationsAsync.
@@ -287,26 +287,26 @@ namespace Joycon2PC.App.Bluetooth
 
                     if (string.Equals(chUuid, NS2_OUTPUT_UUID, StringComparison.OrdinalIgnoreCase))
                     {
-                        Console.WriteLine($"      â˜… NS2 OUTPUT (write command) â€” registered in pass 1");
+                        Console.WriteLine($"      * NS2 OUTPUT (write command) - registered in pass 1");
                         TraceInfo(deviceId, $"NS2 OUTPUT discovered prop={ch.Properties}");
                         RegisterWritable(deviceId, ch);
                     }
                 }
 
-                // â”€â”€ Pass 2: subscribe to INPUT and send SPI init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                // Pass 2: subscribe to INPUT and send SPI init
                 foreach (var ch in chars)
                 {
                     string chUuid = ch.Uuid.ToString().ToLowerInvariant();
                     Console.WriteLine($"      Char: {chUuid} Prop={ch.Properties}");
 
                     if (string.Equals(chUuid, NS2_OUTPUT_UUID, StringComparison.OrdinalIgnoreCase))
-                        Console.WriteLine("      â˜… NS2 OUTPUT (already registered in pass 1)");
+                        Console.WriteLine("      * NS2 OUTPUT (already registered in pass 1)");
 
                     if (string.Equals(chUuid, NS2_INPUT_UUID, StringComparison.OrdinalIgnoreCase) &&
                         (ch.Properties.HasFlag(GattCharacteristicProperties.Notify) ||
                          ch.Properties.HasFlag(GattCharacteristicProperties.Indicate)))
                     {
-                        Console.WriteLine("      â˜… Subscribing to NS2 INPUT");
+                        Console.WriteLine("      * Subscribing to NS2 INPUT");
                         ch.CharacteristicValueChanged += (s, e) =>
                         {
                             if (e.Value == null) return;
@@ -336,7 +336,7 @@ namespace Joycon2PC.App.Bluetooth
 
                         // Send SPI calibration read IMMEDIATELY after subscribing.
                         // The reference implementation (NS2-Connect.py) does this right
-                        // after start_notify â€” without it the controller sends stub reports
+                        // after start_notify - without it the controller sends stub reports
                         // with buttons always zero.
                         // OUTPUT char is already registered (pass 1) so this will succeed.
                         try
@@ -351,11 +351,11 @@ namespace Joycon2PC.App.Bluetooth
                                 };
                                 TraceWrite(deviceId, $"TX SPI-INIT len={spiRead.Length} hex={Hex(spiRead)}");
                                 await wch.WriteValueWithoutResponseAsync(spiRead);
-                                Console.WriteLine($"      âœ“ SPI calibration init sent to {deviceId[..Math.Min(8, deviceId.Length)]}");
+                                Console.WriteLine($"      OK: SPI calibration init sent to {deviceId[..Math.Min(8, deviceId.Length)]}");
                             }
                             else
                             {
-                                Console.WriteLine("      âš  SPI init skipped â€” no writable char found (pass 1 missed OUTPUT)");
+                                Console.WriteLine("      WARN: SPI init skipped - no writable char found (pass 1 missed OUTPUT)");
                                 TraceInfo(deviceId, "SPI init skipped: no writable characteristic registered");
                             }
                         }
@@ -398,7 +398,7 @@ namespace Joycon2PC.App.Bluetooth
             }
             if (!foundNS2)
             {
-                Console.WriteLine("    âš  NS2 service not found â€” falling back to all characteristics");
+                Console.WriteLine("    WARN: NS2 service not found - falling back to all characteristics");
                 TraceInfo(deviceId, "NS2 service not found; fallback characteristic scan");
                 foreach (var svc in services)
                 {

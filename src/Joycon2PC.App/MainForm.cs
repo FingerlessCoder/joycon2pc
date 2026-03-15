@@ -105,6 +105,7 @@ namespace Joycon2PC.App
         private Button _btnTestRumble   = null!;
         private CheckBox _chkConnectSound = null!;
         private CheckBox _chkMouseMode = null!;
+        private ComboBox _cmbMouseStabilizer = null!;
         private ComboBox _cmbMouseSpeed = null!;
         private ComboBox _cmbLogMode = null!;
         private ComboBox _cmbDeviceTarget = null!;
@@ -122,11 +123,16 @@ namespace Joycon2PC.App
         private bool _mouseMiddlePressed;
         private double _mousePendingMoveX;
         private double _mousePendingMoveY;
+        private double _mouseFilteredDx;
+        private double _mouseFilteredDy;
+        private double _mouseScrollAccumulator;
+        private DateTime _mouseLastOpticalReportUtc = DateTime.MinValue;
         private DateTime _mouseLastMoveUtc = DateTime.MinValue;
-
-        private const int MOUSE_OPTICAL_DEADZONE = 1;
-        private const int MOUSE_OPTICAL_DELTA_CLAMP = 90;
-        private const int MOUSE_DISPATCH_INTERVAL_MS = 6;
+        private int _mouseMiddleStableCount;
+        private bool _mouseMiddleDebouncedPressed;
+        private const int MOUSE_WHEEL_DELTA = 120;
+        private const int MOUSE_SCROLL_STICK_DEADZONE = 220;
+        private const double MOUSE_SCROLL_GAIN = 1.0 / 8000.0;
 
         private enum MouseSpeedMode
         {
@@ -135,7 +141,15 @@ namespace Joycon2PC.App
             Slow,
         }
 
+        private enum MouseStabilizerMode
+        {
+            Raw,
+            Stable,
+            VeryStable,
+        }
+
         private MouseSpeedMode _mouseSpeedMode = MouseSpeedMode.Normal;
+        private MouseStabilizerMode _mouseStabilizerMode = MouseStabilizerMode.Stable;
 
         private JoyConVisualizerPanel _joyconViz = null!;
 
@@ -453,6 +467,28 @@ namespace Joycon2PC.App
                 Log($"Mouse mode {( _mouseModeEnabled ? "enabled" : "disabled")}.", ACCENT);
             };
             modulePanel.Controls.Add(_chkMouseMode);
+
+            _cmbMouseStabilizer = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = FONT_SM,
+                BackColor = PANEL_ALT,
+                ForeColor = TXT,
+                Bounds = new Rectangle(472, 8, 112, 24),
+            };
+            _cmbMouseStabilizer.Items.AddRange(new object[] { "Stab: Raw", "Stab: Stable", "Stab: VStable" });
+            _cmbMouseStabilizer.SelectedIndex = 1;
+            _cmbMouseStabilizer.SelectedIndexChanged += (sender, args) =>
+            {
+                _mouseStabilizerMode = _cmbMouseStabilizer.SelectedIndex switch
+                {
+                    0 => MouseStabilizerMode.Raw,
+                    2 => MouseStabilizerMode.VeryStable,
+                    _ => MouseStabilizerMode.Stable,
+                };
+                ResetMouseModeState(releasePressedButtons: false);
+            };
+            modulePanel.Controls.Add(_cmbMouseStabilizer);
 
             _cmbMouseSpeed = new ComboBox
             {
@@ -1491,6 +1527,7 @@ namespace Joycon2PC.App
         private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
         private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
         private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
+        private const uint MOUSEEVENTF_WHEEL = 0x0800;
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint SendInput(uint nInputs, NativeInput[] pInputs, int cbSize);
@@ -1516,6 +1553,14 @@ namespace Joycon2PC.App
                 MouseSpeedMode.Fast => 1.0f,
                 MouseSpeedMode.Slow => 0.3f,
                 _ => 0.6f,
+            };
+
+        private (int deadzone, int clamp, int dispatchIntervalMs, double smoothingAlpha, double minStep) GetMouseStabilizerProfile()
+            => _mouseStabilizerMode switch
+            {
+                MouseStabilizerMode.Raw => (0, 220, 1, 1.00, 0.0),
+                MouseStabilizerMode.VeryStable => (4, 48, 10, 0.22, 0.9),
+                _ => (2, 96, 6, 0.45, 0.35),
             };
 
         private void SendMouseButton(uint downFlag, uint upFlag, bool pressed, ref bool previous)
@@ -1549,6 +1594,28 @@ namespace Joycon2PC.App
             _ = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
         }
 
+        private void SendMouseWheel(int wheelDelta)
+        {
+            var input = new NativeInput
+            {
+                type = INPUT_MOUSE,
+                U = new InputUnion
+                {
+                    mi = new MouseInput
+                    {
+                        dx = 0,
+                        dy = 0,
+                        mouseData = unchecked((uint)wheelDelta),
+                        dwFlags = MOUSEEVENTF_WHEEL,
+                        time = 0,
+                        dwExtraInfo = IntPtr.Zero,
+                    }
+                }
+            };
+
+            _ = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
+        }
+
         private void ResetMouseModeState(bool releasePressedButtons)
         {
             _mouseFirstOpticalRead = true;
@@ -1556,7 +1623,13 @@ namespace Joycon2PC.App
             _mouseLastOpticalY = 0;
             _mousePendingMoveX = 0;
             _mousePendingMoveY = 0;
+            _mouseFilteredDx = 0;
+            _mouseFilteredDy = 0;
+            _mouseScrollAccumulator = 0;
+            _mouseLastOpticalReportUtc = DateTime.MinValue;
             _mouseLastMoveUtc = DateTime.MinValue;
+            _mouseMiddleStableCount = 0;
+            _mouseMiddleDebouncedPressed = false;
 
             if (releasePressedButtons)
             {
@@ -1577,17 +1650,12 @@ namespace Joycon2PC.App
             if (!_mouseModeEnabled)
                 return;
 
-            // Dual-device mode: hard-lock mouse source to the assigned right Joy-Con.
-            // Fallback to button-heuristic only before side assignment is available.
-            if (!string.IsNullOrWhiteSpace(_rightDeviceId))
-            {
-                if (!string.Equals(deviceId, _rightDeviceId, StringComparison.OrdinalIgnoreCase))
-                    return;
-            }
-            else if (!IsRightMouseButtonController(state))
-            {
+            if (string.IsNullOrWhiteSpace(_rightDeviceId))
                 return;
-            }
+
+            // Dual-device mode: hard-lock mouse source to the assigned right Joy-Con.
+            if (!string.Equals(deviceId, _rightDeviceId, StringComparison.OrdinalIgnoreCase))
+                return;
 
             int off = data.Length > 0 && data[0] == 0xA1 ? 1 : 0;
             if (data.Length < off + 0x14)
@@ -1595,43 +1663,67 @@ namespace Joycon2PC.App
 
             short rawX = ReadInt16LE(data[off + 0x10], data[off + 0x11]);
             short rawY = ReadInt16LE(data[off + 0x12], data[off + 0x13]);
+            var now = DateTime.UtcNow;
 
             if (_mouseFirstOpticalRead)
             {
                 _mouseLastOpticalX = rawX;
                 _mouseLastOpticalY = rawY;
+                _mouseLastOpticalReportUtc = now;
                 _mouseFirstOpticalRead = false;
                 return;
             }
+
+            double reportGapMs = _mouseLastOpticalReportUtc == DateTime.MinValue
+                ? 0
+                : (now - _mouseLastOpticalReportUtc).TotalMilliseconds;
+            _mouseLastOpticalReportUtc = now;
 
             int dx = rawX - _mouseLastOpticalX;
             int dy = rawY - _mouseLastOpticalY;
             _mouseLastOpticalX = rawX;
             _mouseLastOpticalY = rawY;
 
+            var profile = GetMouseStabilizerProfile();
+
             // Reject tiny optical noise and clamp spikes from occasional sensor bursts.
-            if (Math.Abs(dx) <= MOUSE_OPTICAL_DEADZONE)
+            if (Math.Abs(dx) <= profile.deadzone)
                 dx = 0;
-            if (Math.Abs(dy) <= MOUSE_OPTICAL_DEADZONE)
+            if (Math.Abs(dy) <= profile.deadzone)
                 dy = 0;
 
-            dx = Math.Clamp(dx, -MOUSE_OPTICAL_DELTA_CLAMP, MOUSE_OPTICAL_DELTA_CLAMP);
-            dy = Math.Clamp(dy, -MOUSE_OPTICAL_DELTA_CLAMP, MOUSE_OPTICAL_DELTA_CLAMP);
+            dx = Math.Clamp(dx, -profile.clamp, profile.clamp);
+            dy = Math.Clamp(dy, -profile.clamp, profile.clamp);
+
+            // Exponential smoothing gives a visible difference across stabilizer levels.
+            // For medium/fast motion, boost alpha to reduce perceived trailing.
+            int opticalMagnitude = Math.Abs(dx) + Math.Abs(dy);
+            double dynamicAlpha = profile.smoothingAlpha;
+            if (opticalMagnitude >= 18)
+                dynamicAlpha = Math.Min(1.0, dynamicAlpha + 0.20);
+            if (opticalMagnitude >= 36)
+                dynamicAlpha = Math.Min(1.0, dynamicAlpha + 0.20);
+
+            _mouseFilteredDx += (dx - _mouseFilteredDx) * dynamicAlpha;
+            _mouseFilteredDy += (dy - _mouseFilteredDy) * dynamicAlpha;
 
             float sensitivity = GetMouseSensitivity();
-            _mousePendingMoveX += dx * sensitivity;
-            _mousePendingMoveY += dy * sensitivity;
+            _mousePendingMoveX += _mouseFilteredDx * sensitivity;
+            _mousePendingMoveY += _mouseFilteredDy * sensitivity;
 
-            var now = DateTime.UtcNow;
-            if ((now - _mouseLastMoveUtc).TotalMilliseconds >= MOUSE_DISPATCH_INTERVAL_MS)
+            if ((now - _mouseLastMoveUtc).TotalMilliseconds >= profile.dispatchIntervalMs)
             {
                 int moveX = (int)Math.Truncate(_mousePendingMoveX);
                 int moveY = (int)Math.Truncate(_mousePendingMoveY);
+
+                if (Math.Abs(_mousePendingMoveX) < profile.minStep) moveX = 0;
+                if (Math.Abs(_mousePendingMoveY) < profile.minStep) moveY = 0;
+
                 if (moveX != 0 || moveY != 0)
                 {
                     _mousePendingMoveX -= moveX;
                     _mousePendingMoveY -= moveY;
-                    SendMouseInput(moveX, moveY, MOUSEEVENTF_MOVE);
+                    DispatchMouseMoveInterpolated(moveX, moveY, reportGapMs);
                 }
                 _mouseLastMoveUtc = now;
             }
@@ -1639,7 +1731,72 @@ namespace Joycon2PC.App
             // cpp mapping: R=left click, ZR=right click, RStick=middle click.
             SendMouseButton(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, state.IsPressed(SW2Button.R), ref _mouseLeftPressed);
             SendMouseButton(MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, state.IsPressed(SW2Button.ZR), ref _mouseRightPressed);
-            SendMouseButton(MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, state.IsPressed(SW2Button.RStick), ref _mouseMiddlePressed);
+
+            // RS click can chatter on some devices; require 3 stable reports before toggling middle click.
+            bool middleRawPressed = state.IsPressed(SW2Button.RStick);
+            if (middleRawPressed == _mouseMiddleDebouncedPressed)
+            {
+                _mouseMiddleStableCount = 0;
+            }
+            else
+            {
+                _mouseMiddleStableCount++;
+                if (_mouseMiddleStableCount >= 3)
+                {
+                    _mouseMiddleDebouncedPressed = middleRawPressed;
+                    _mouseMiddleStableCount = 0;
+                }
+            }
+
+            SendMouseButton(MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, _mouseMiddleDebouncedPressed, ref _mouseMiddlePressed);
+
+            // Right stick vertical axis -> mouse wheel scrolling.
+            int stickY = state.RightStickY - NS2InputReportDecoder.NeutralStickValue;
+            if (Math.Abs(stickY) < MOUSE_SCROLL_STICK_DEADZONE)
+                stickY = 0;
+
+            if (stickY != 0)
+            {
+                // Up on stick (higher raw Y) → positive wheel delta = scroll up in Windows.
+                _mouseScrollAccumulator += stickY * MOUSE_SCROLL_GAIN;
+
+                int clicks = (int)Math.Truncate(_mouseScrollAccumulator);
+                if (clicks != 0)
+                {
+                    _mouseScrollAccumulator -= clicks;
+                    SendMouseWheel(clicks * MOUSE_WHEEL_DELTA);
+                }
+            }
+        }
+
+        private void DispatchMouseMoveInterpolated(int moveX, int moveY, double reportGapMs)
+        {
+            int steps = 1;
+
+            // BLE optical reports can be sparse; split one big jump into micro-steps
+            // so cursor motion appears less stuttery to the eye.
+            if (reportGapMs >= 30)
+                steps = 3;
+            else if (reportGapMs >= 20)
+                steps = 2;
+
+            if (steps == 1 && (Math.Abs(moveX) + Math.Abs(moveY) >= 18))
+                steps = 2;
+
+            int remainingX = moveX;
+            int remainingY = moveY;
+            for (int i = 0; i < steps; i++)
+            {
+                int slots = steps - i;
+                int stepX = (int)Math.Round(remainingX / (double)slots);
+                int stepY = (int)Math.Round(remainingY / (double)slots);
+
+                remainingX -= stepX;
+                remainingY -= stepY;
+
+                if (stepX != 0 || stepY != 0)
+                    SendMouseInput(stepX, stepY, MOUSEEVENTF_MOVE);
+            }
         }
 
         private void InitializeOptionControls()
