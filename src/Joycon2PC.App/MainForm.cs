@@ -59,8 +59,6 @@ namespace Joycon2PC.App
             public override string ToString() => Label;
         }
 
-        private static readonly byte[] LedTestPatterns = new byte[] { 0x00, 0x01, 0x02, 0x04, 0x08, 0x03, 0x06, 0x0C, 0x0F };
-
         // ── theme colours ──────────────────────────────────────────────────
         private static readonly Color BG            = Color.FromArgb(20,  20,  20);
         private static readonly Color PANEL         = Color.FromArgb(32,  32,  32);
@@ -93,6 +91,8 @@ namespace Joycon2PC.App
         private bool _powerEventsSubscribed;
         private LogMode _logMode = LogMode.User;
         private readonly List<LogEntry> _logEntries = new();
+        private const int MAX_LOG_ENTRIES = 500;
+        private const int MAX_LOG_LINES = 300;
 
         // ── controls ──────────────────────────────────────────────────────
         private Label  _lblVigemStatus  = null!;
@@ -670,7 +670,7 @@ namespace Joycon2PC.App
                 // at runtime using JOYCON2PC_RAW_BYTE_DIFF_LOG / JOYCON2PC_VERBOSE_INPUT_LOG.
                 bool enableRawByteDiffLog = IsEnabledByEnv("JOYCON2PC_RAW_BYTE_DIFF_LOG");
                 bool enableVerboseInputLog = IsEnabledByEnv("JOYCON2PC_VERBOSE_INPUT_LOG");
-                bool enableHardcoreDiag = !IsEnabledByEnv("JOYCON2PC_HARDCORE_DIAG_OFF");
+                bool enableHardcoreDiag = IsEnabledByEnv("JOYCON2PC_HARDCORE_DIAG");
 
                 if (enableHardcoreDiag)
                 {
@@ -678,7 +678,7 @@ namespace Joycon2PC.App
                     {
                         try { BeginInvoke(() => DevLog($"TXDBG {line}", Color.FromArgb(255, 170, 70))); } catch { }
                     };
-                    try { BeginInvoke(() => DevLog("Hardcore diagnostic mode: ON (set JOYCON2PC_HARDCORE_DIAG_OFF=1 to disable)", Color.FromArgb(255, 170, 70))); } catch { }
+                    try { BeginInvoke(() => DevLog("Hardcore diagnostic mode: ON (JOYCON2PC_HARDCORE_DIAG=1)", Color.FromArgb(255, 170, 70))); } catch { }
                 }
 
                 // Require the same button word in N consecutive reports before applying.
@@ -1181,9 +1181,11 @@ namespace Joycon2PC.App
                     if (!sent)
                         break;
 
-                    int delayMs = index == initCommands.Length - 1 ? 200 : 500;
-                    try { await Task.Delay(delayMs, ct); }
-                    catch { return; }
+                    if (index < initCommands.Length - 1)
+                    {
+                        try { await Task.Delay(500, ct); }
+                        catch { return; }
+                    }
                 }
             }
         }
@@ -1398,11 +1400,11 @@ namespace Joycon2PC.App
                 new ByteOption { Label = "0x01 Click / tap",        Value = 0x01 },
                 new ByteOption { Label = "0x02 Low battery alert",  Value = 0x02 },
                 new ByteOption { Label = "0x03 Reconnected",         Value = 0x03 },
-                  new ByteOption { Label = "0x05 Reconnected (alt)",   Value = 0x05 },
-                  new ByteOption { Label = "0x06 Short high beep A",    Value = 0x06 },
-                  new ByteOption { Label = "0x07 Short high beep B",    Value = 0x07 },
-                 new ByteOption { Label = "0x08 Experimental",        Value = 0x08 },
-                 new ByteOption { Label = "0x09 Experimental",        Value = 0x09 },
+                                new ByteOption { Label = "0x05 Reconnected (alt)",   Value = 0x05 },
+                                new ByteOption { Label = "0x06 Short high beep A",    Value = 0x06 },
+                                new ByteOption { Label = "0x07 Short high beep B",    Value = 0x07 },
+                                new ByteOption { Label = "0x08 Experimental",         Value = 0x08 },
+                                new ByteOption { Label = "0x09 Experimental",         Value = 0x09 },
             });
             _cmbSoundPreset.SelectedIndex = 0;
 
@@ -1713,8 +1715,8 @@ namespace Joycon2PC.App
             };
 
             _logEntries.Add(entry);
-            if (_logEntries.Count > 500)
-                _logEntries.RemoveRange(0, _logEntries.Count - 500);
+            if (_logEntries.Count > MAX_LOG_ENTRIES)
+                _logEntries.RemoveRange(0, _logEntries.Count - MAX_LOG_ENTRIES);
 
             if (!ShouldDisplay(entry.Audience))
                 return;
@@ -1759,6 +1761,21 @@ namespace Joycon2PC.App
             _log.SelectionColor  = entry.Color;
             _log.AppendText(entry.Message + "\n");
             _log.ScrollToCaret();
+            TrimLogControlLines();
+        }
+
+        private void TrimLogControlLines()
+        {
+            int overflow = _log.Lines.Length - MAX_LOG_LINES;
+            if (overflow <= 0)
+                return;
+
+            int removeTo = _log.GetFirstCharIndexFromLine(overflow);
+            if (removeTo <= 0)
+                return;
+
+            _log.Select(0, removeTo);
+            _log.SelectedText = string.Empty;
         }
 
         // ══════════════════════════════════════════════════════════════════

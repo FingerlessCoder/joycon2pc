@@ -72,19 +72,18 @@ namespace Joycon2PC.App.Bluetooth
     private static string Hex(byte[] data)
         => data == null || data.Length == 0 ? "<empty>" : BitConverter.ToString(data);
 
-    private void TraceWrite(string deviceId, string message)
+    private void Trace(string level, string deviceId, string message)
     {
-        string line = $"[{DateTime.Now:HH:mm:ss.fff}] [{ShortId(deviceId)}] {message}";
+        string line = $"[{DateTime.Now:HH:mm:ss.fff}] [{ShortId(deviceId)}] [{level}] {message}";
         Console.WriteLine(line);
         try { DiagnosticTrace?.Invoke(deviceId, line); } catch { }
     }
 
+    private void TraceWrite(string deviceId, string message)
+        => Trace("WRITE", deviceId, message);
+
     private void TraceInfo(string deviceId, string message)
-    {
-        string line = $"[{DateTime.Now:HH:mm:ss.fff}] [{ShortId(deviceId)}] {message}";
-        Console.WriteLine(line);
-        try { DiagnosticTrace?.Invoke(deviceId, line); } catch { }
-    }
+        => Trace("INFO", deviceId, message);
 
     private async Task<bool> StartNotificationsWithRetryAsync(
         string deviceId,
