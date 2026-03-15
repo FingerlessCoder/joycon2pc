@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using System.Threading;
@@ -38,16 +39,6 @@ namespace Joycon2PC.App
         {
             public required string Label { get; init; }
             public required byte Value { get; init; }
-
-            public override string ToString() => Label;
-        }
-
-        private sealed class RumblePresetOption
-        {
-            public required string Label { get; init; }
-            public required byte LargeMotor { get; init; }
-            public required byte SmallMotor { get; init; }
-            public required int DurationMs { get; init; }
 
             public override string ToString() => Label;
         }
@@ -102,16 +93,23 @@ namespace Joycon2PC.App
         private Button _btnReconnect    = null!;
         private Button _btnTestSound    = null!;
         private Button _btnApplyLed     = null!;
-        private Button _btnTestRumble   = null!;
         private CheckBox _chkConnectSound = null!;
         private CheckBox _chkMouseMode = null!;
+        private CheckBox _chkShowDevLogs = null!;
+        private Button _btnExportLog = null!;
+        private Button _btnCopyLogSummary = null!;
+        private int _copySummaryFeedbackVersion;
+        private Label _lblLinkHealth = null!;
+        private Label _lblConnectModeStatus = null!;
+        private Label _lblStageScan = null!;
+        private Label _lblStageInit = null!;
+        private Label _lblStageReady = null!;
+        private ProgressBar _prgConnectStage = null!;
         private ComboBox _cmbMouseStabilizer = null!;
         private ComboBox _cmbMouseSpeed = null!;
-        private ComboBox _cmbLogMode = null!;
         private ComboBox _cmbDeviceTarget = null!;
         private ComboBox _cmbSoundPreset = null!;
         private ComboBox _cmbLedPattern = null!;
-        private ComboBox _cmbRumblePreset = null!;
         private RichTextBox _log        = null!;
 
         private bool _mouseModeEnabled;
@@ -151,6 +149,16 @@ namespace Joycon2PC.App
 
         private MouseSpeedMode _mouseSpeedMode = MouseSpeedMode.Normal;
         private MouseStabilizerMode _mouseStabilizerMode = MouseStabilizerMode.Stable;
+        private const int CONNECT_FEEDBACK_PLAYER_NUM = 1;
+        private bool _reconnectInProgress;
+        private DateTime _lastReconnectRequestUtc = DateTime.MinValue;
+        private DateTime _lastInputReportUtc = DateTime.MinValue;
+        private DateTime _lastReadyUtc = DateTime.MinValue;
+        private int _reconnectAttemptCount;
+        private System.Windows.Forms.Timer? _healthTimer;
+        private static readonly TimeSpan RECONNECT_MIN_INTERVAL = TimeSpan.FromMilliseconds(900);
+        private static readonly TimeSpan RECONNECT_SETTLE_WIN10 = TimeSpan.FromMilliseconds(1200);
+        private static readonly TimeSpan RECONNECT_SETTLE_WIN11 = TimeSpan.FromMilliseconds(380);
 
         private JoyConVisualizerPanel _joyconViz = null!;
 
@@ -185,7 +193,7 @@ namespace Joycon2PC.App
             lblTitle.AutoSize = true;
             Controls.Add(lblTitle);
 
-            var lblSubtitle = MakeLabel("Joy-Con 2 to virtual Xbox controller bridge", 9, new Point(20, 46), color: TXT_DIM);
+            var lblSubtitle = MakeLabel("Joy-Con 2 to virtual Xbox controller bridge", 9, new Point(20, lblTitle.Bottom + 4), color: TXT_DIM);
             lblSubtitle.AutoSize = true;
             Controls.Add(lblSubtitle);
 
@@ -193,7 +201,7 @@ namespace Joycon2PC.App
             var statusPanel = new Panel
             {
                 BackColor = PANEL,
-                Bounds    = new Rectangle(14, 66, 968, 92),
+                Bounds    = new Rectangle(14, lblSubtitle.Bottom + 8, 968, 124),
                 Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 BorderStyle = BorderStyle.FixedSingle,
             };
@@ -212,8 +220,10 @@ namespace Joycon2PC.App
 
             leftStatusCard.Controls.Add(MakeLabel("ViGEm Driver", 9, new Point(10, 6), bold: true));
             _lblVigemStatus = MakeLabel("Not checked", 9, new Point(10, 25), color: YELLOW);
+            _lblVigemStatus.AutoSize = false;
+            _lblVigemStatus.AutoEllipsis = true;
+            _lblVigemStatus.Size = new Size(300, 18);
             leftStatusCard.Controls.Add(_lblVigemStatus);
-            leftStatusCard.Controls.Add(MakeLabel("Install ViGEmBus if unavailable", 8, new Point(168, 25), color: TXT_DIM));
 
             var rightStatusCard = new Panel
             {
@@ -226,8 +236,26 @@ namespace Joycon2PC.App
 
             rightStatusCard.Controls.Add(MakeLabel("Joy-Con Link", 9, new Point(10, 6), bold: true));
             _lblJoyconStatus = MakeLabel("Not connected", 9, new Point(10, 25), color: TXT_DIM);
+            _lblJoyconStatus.AutoSize = false;
+            _lblJoyconStatus.AutoEllipsis = true;
+            _lblJoyconStatus.Size = new Size(300, 18);
             rightStatusCard.Controls.Add(_lblJoyconStatus);
-            rightStatusCard.Controls.Add(MakeLabel("Pair in Windows Bluetooth settings", 8, new Point(168, 25), color: TXT_DIM));
+
+            var healthPanel = new Panel
+            {
+                BackColor = PANEL_ALT,
+                BorderStyle = BorderStyle.FixedSingle,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            };
+            statusPanel.Controls.Add(healthPanel);
+
+            healthPanel.Controls.Add(MakeLabel("Link Health", 8, new Point(10, 5), color: TXT_DIM));
+            _lblLinkHealth = MakeLabel("Waiting for first input report...", 8, new Point(86, 5), color: TXT_DIM);
+            _lblLinkHealth.AutoSize = false;
+            _lblLinkHealth.AutoEllipsis = true;
+            _lblLinkHealth.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _lblLinkHealth.Size = new Size(840, 16);
+            healthPanel.Controls.Add(_lblLinkHealth);
 
             void LayoutStatusCards()
             {
@@ -235,6 +263,8 @@ namespace Joycon2PC.App
                 const int gap = 12;
                 const int top = 30;
                 const int height = 50;
+                const int healthTop = 84;
+                const int healthHeight = 28;
 
                 int availableWidth = statusPanel.ClientSize.Width - (margin * 2) - gap;
                 if (availableWidth < 2 * 100)
@@ -246,6 +276,12 @@ namespace Joycon2PC.App
                 int cardWidth = availableWidth / 2;
                 leftStatusCard.Bounds = new Rectangle(margin, top, cardWidth, height);
                 rightStatusCard.Bounds = new Rectangle(margin + cardWidth + gap, top, cardWidth, height);
+                _lblVigemStatus.Width = Math.Max(120, cardWidth - 20);
+                _lblJoyconStatus.Width = Math.Max(120, cardWidth - 20);
+
+                int healthWidth = Math.Max(200, statusPanel.ClientSize.Width - (margin * 2));
+                healthPanel.Bounds = new Rectangle(margin, healthTop, healthWidth, healthHeight);
+                _lblLinkHealth.Width = Math.Max(100, healthPanel.ClientSize.Width - 96);
             }
 
             statusPanel.Resize += (sender, args) => LayoutStatusCards();
@@ -254,14 +290,14 @@ namespace Joycon2PC.App
             // ── main content area ─────────────────────────────────────────
             var contentGrid = new TableLayoutPanel
             {
-                Bounds = new Rectangle(14, 170, 968, 344),
+                Bounds = new Rectangle(14, statusPanel.Bottom + 12, 968, 336),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
                 BackColor = Color.Transparent,
                 ColumnCount = 2,
                 RowCount = 1,
             };
-            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 432f));
-            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44f));
+            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56f));
             contentGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             Controls.Add(contentGrid);
 
@@ -270,7 +306,7 @@ namespace Joycon2PC.App
             {
                 BackColor   = PANEL,
                 Dock        = DockStyle.Fill,
-                MinimumSize = new Size(432, 332),
+                MinimumSize = new Size(360, 300),
             };
             contentGrid.Controls.Add(_joyconViz, 0, 0);
 
@@ -281,35 +317,82 @@ namespace Joycon2PC.App
                 Dock = DockStyle.Fill,
                 BorderStyle = BorderStyle.FixedSingle,
                 Margin = new Padding(0),
-                Padding = new Padding(10, 34, 10, 10),
+                Padding = new Padding(10),
             };
             contentGrid.Controls.Add(logCard, 1, 0);
 
-            var logLabel = MakeLabel("Log", 10, new Point(10, 8), bold: true, color: ACCENT);
-            logLabel.AutoSize = true;
-            logCard.Controls.Add(logLabel);
-
-            var lblLogMode = MakeLabel("Mode", 8, new Point(388, 10), color: TXT_DIM);
-            lblLogMode.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            logCard.Controls.Add(lblLogMode);
-
-            _cmbLogMode = new ComboBox
+            var logHeader = new Panel
             {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = FONT_SM,
-                BackColor = PANEL_ALT,
-                ForeColor = TXT,
-                Bounds = new Rectangle(430, 6, 104, 24),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Dock = DockStyle.Top,
+                Height = 32,
+                BackColor = Color.Transparent,
             };
-            _cmbLogMode.Items.AddRange(new object[] { "User", "Developer" });
-            _cmbLogMode.SelectedIndex = 0;
-            _cmbLogMode.SelectedIndexChanged += (sender, args) =>
+            logCard.Controls.Add(logHeader);
+
+            var logLabel = MakeLabel("Log", 10, new Point(0, 4), bold: true, color: ACCENT);
+            logLabel.AutoSize = true;
+            logHeader.Controls.Add(logLabel);
+
+            _btnCopyLogSummary = new Button
             {
-                _logMode = _cmbLogMode.SelectedIndex <= 0 ? LogMode.User : LogMode.Developer;
+                Text = "Copy issues",
+                Font = FONT_SM,
+                BackColor = BTN_SECONDARY,
+                ForeColor = TXT,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(94, 24),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 3, 0, 0),
+            };
+            _btnCopyLogSummary.FlatAppearance.BorderSize = 1;
+            _btnCopyLogSummary.FlatAppearance.BorderColor = BORDER;
+            _btnCopyLogSummary.Click += async (sender, args) => await CopyRecentIssueSummaryToClipboardAsync();
+
+            _btnExportLog = new Button
+            {
+                Text = "Export log",
+                Font = FONT_SM,
+                BackColor = BTN_SECONDARY,
+                ForeColor = TXT,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(88, 24),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 3, 0, 0),
+            };
+            _btnExportLog.FlatAppearance.BorderSize = 1;
+            _btnExportLog.FlatAppearance.BorderColor = BORDER;
+            _btnExportLog.Click += (sender, args) => ExportLogToFile();
+
+            _chkShowDevLogs = new CheckBox
+            {
+                Text = "Dev details",
+                Font = FONT_SM,
+                BackColor = Color.Transparent,
+                ForeColor = TXT,
+                AutoSize = true,
+                Margin = new Padding(0, 6, 8, 0),
+            };
+            _chkShowDevLogs.CheckedChanged += (sender, args) =>
+            {
+                _logMode = _chkShowDevLogs.Checked ? LogMode.Developer : LogMode.User;
                 RebuildLogView();
             };
-            logCard.Controls.Add(_cmbLogMode);
+
+            var logActions = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Right,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+            logActions.Controls.Add(_chkShowDevLogs);
+            logActions.Controls.Add(_btnExportLog);
+            logActions.Controls.Add(_btnCopyLogSummary);
+            logHeader.Controls.Add(logActions);
 
             _log = new RichTextBox
             {
@@ -335,18 +418,17 @@ namespace Joycon2PC.App
 
             _btnStart = new Button
             {
-                Text      = "Start Scan",
+                Text      = "Connect Joy-Cons",
                 BackColor = BTN_PRIMARY,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font      = new Font("Bahnschrift", 11f, FontStyle.Bold),
-                Bounds    = new Rectangle(0, 0, 250, 56),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Left,
+                Size      = new Size(280, 60),
+                Margin    = new Padding(0, 0, 10, 0),
                 Cursor    = Cursors.Hand,
             };
             _btnStart.FlatAppearance.BorderSize = 0;
             _btnStart.Click += OnStartClicked;
-            actionPanel.Controls.Add(_btnStart);
 
             _btnReconnect = new Button
             {
@@ -355,74 +437,154 @@ namespace Joycon2PC.App
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font      = FONT_MD,
-                Bounds    = new Rectangle(264, 0, 150, 56),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Left,
+                Size      = new Size(170, 60),
+                Margin    = new Padding(0, 0, 0, 0),
                 Cursor    = Cursors.Hand,
             };
             _btnReconnect.FlatAppearance.BorderSize = 1;
             _btnReconnect.FlatAppearance.BorderColor = BORDER;
             _btnReconnect.Click += (s, e) => OnReconnectClicked();
-            actionPanel.Controls.Add(_btnReconnect);
+
+            var actionFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Left,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+            actionFlow.Controls.Add(_btnStart);
+            actionFlow.Controls.Add(_btnReconnect);
+            actionPanel.Controls.Add(actionFlow);
 
             var modulePanel = new Panel
             {
                 BackColor = PANEL,
                 BorderStyle = BorderStyle.FixedSingle,
-                Bounds = new Rectangle(14, 594, 968, 112),
+                Bounds = new Rectangle(14, 586, 968, 120),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
             };
             Controls.Add(modulePanel);
 
-            var lblModuleTitle = MakeLabel("Quick Controls", 10, new Point(10, 8), bold: true, color: ACCENT);
+            void LayoutVerticalSections()
+            {
+                int margin = Math.Max(12, (int)Math.Round(12f * DeviceDpi / 96f));
+                int gap = margin;
+                int width = Math.Max(320, ClientSize.Width - margin * 2);
+                int actionHeight = Math.Max(60, (int)Math.Round(60f * DeviceDpi / 96f));
+                int moduleHeight = Math.Max(120, (int)Math.Round(120f * DeviceDpi / 96f));
+
+                int contentTop = statusPanel.Bottom + gap;
+                int reservedBottom = gap + actionHeight + gap + moduleHeight + gap;
+                int contentHeight = Math.Max(220, ClientSize.Height - contentTop - reservedBottom);
+
+                contentGrid.Bounds = new Rectangle(margin, contentTop, width, contentHeight);
+                actionPanel.Bounds = new Rectangle(margin, contentGrid.Bottom + gap, width, actionHeight);
+                modulePanel.Bounds = new Rectangle(margin, actionPanel.Bottom + gap, width, moduleHeight);
+            }
+
+            Resize += (sender, args) => LayoutVerticalSections();
+            LayoutVerticalSections();
+
+            var lblModuleTitle = MakeLabel("Controls", 10, new Point(10, 8), bold: true, color: ACCENT);
             modulePanel.Controls.Add(lblModuleTitle);
 
-            modulePanel.Controls.Add(MakeLabel("Target", 8, new Point(12, 40), color: TXT_DIM));
+            var controlsGrid = new TableLayoutPanel
+            {
+                Bounds = new Rectangle(10, 30, 946, 82),
+                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
+                BackColor = Color.Transparent,
+                ColumnCount = 3,
+                RowCount = 3,
+            };
+            controlsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32f));
+            controlsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34f));
+            controlsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34f));
+            controlsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
+            controlsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));
+            controlsGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            modulePanel.Controls.Add(controlsGrid);
+
+            var deviceFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                BackColor = Color.Transparent,
+            };
+            deviceFlow.Controls.Add(MakeLabel("Device", 8, new Point(0, 0), color: TXT_DIM));
             _cmbDeviceTarget = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(58, 36, 176, 24),
+                Width = 190,
+                Margin = new Padding(8, 4, 0, 0),
             };
-            modulePanel.Controls.Add(_cmbDeviceTarget);
+            deviceFlow.Controls.Add(_cmbDeviceTarget);
+            controlsGrid.Controls.Add(deviceFlow, 0, 0);
 
-            modulePanel.Controls.Add(MakeLabel("Sound", 8, new Point(248, 40), color: TXT_DIM));
+            var feedbackFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                BackColor = Color.Transparent,
+            };
+            feedbackFlow.Controls.Add(MakeLabel("Sound", 8, new Point(0, 0), color: TXT_DIM));
             _cmbSoundPreset = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(290, 36, 144, 24),
+                Width = 120,
+                Margin = new Padding(8, 4, 0, 0),
             };
-            modulePanel.Controls.Add(_cmbSoundPreset);
+            feedbackFlow.Controls.Add(_cmbSoundPreset);
 
             _btnTestSound = new Button
             {
-                Text = "▶ Sound",
+                Text = "Test Sound",
                 BackColor = BTN_SECONDARY,
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font = FONT_SM,
-                Bounds = new Rectangle(438, 34, 68, 28),
+                Size = new Size(84, 26),
+                Margin = new Padding(8, 3, 0, 0),
                 Cursor = Cursors.Hand,
             };
             _btnTestSound.FlatAppearance.BorderSize = 1;
             _btnTestSound.FlatAppearance.BorderColor = BORDER;
             _btnTestSound.Click += async (sender, args) => await TriggerManualSoundTestAsync();
-            modulePanel.Controls.Add(_btnTestSound);
+            feedbackFlow.Controls.Add(_btnTestSound);
+            controlsGrid.Controls.Add(feedbackFlow, 1, 0);
 
-            modulePanel.Controls.Add(MakeLabel("LED", 8, new Point(518, 40), color: TXT_DIM));
+            var rightFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                BackColor = Color.Transparent,
+            };
+
+            rightFlow.Controls.Add(MakeLabel("LED", 8, new Point(0, 0), color: TXT_DIM));
             _cmbLedPattern = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(542, 36, 144, 24),
+                Width = 102,
+                Margin = new Padding(8, 4, 0, 0),
             };
-            modulePanel.Controls.Add(_cmbLedPattern);
+            rightFlow.Controls.Add(_cmbLedPattern);
 
             _btnApplyLed = new Button
             {
@@ -431,35 +593,46 @@ namespace Joycon2PC.App
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font = FONT_SM,
-                Bounds = new Rectangle(692, 34, 76, 28),
+                Size = new Size(80, 26),
+                Margin = new Padding(8, 3, 0, 0),
                 Cursor = Cursors.Hand,
             };
             _btnApplyLed.FlatAppearance.BorderSize = 1;
             _btnApplyLed.FlatAppearance.BorderColor = BORDER;
             _btnApplyLed.Click += async (sender, args) => await TriggerManualLedApplyAsync();
-            modulePanel.Controls.Add(_btnApplyLed);
+            rightFlow.Controls.Add(_btnApplyLed);
 
             _chkConnectSound = new CheckBox
             {
-                Text = "Connect sound",
+                Text = "Auto sound",
                 Checked = true,
                 AutoSize = true,
                 ForeColor = TXT_DIM,
                 BackColor = Color.Transparent,
                 Font = FONT_SM,
-                Location = new Point(790, 10),
+                Margin = new Padding(10, 6, 0, 0),
             };
-            modulePanel.Controls.Add(_chkConnectSound);
+            rightFlow.Controls.Add(_chkConnectSound);
+            controlsGrid.Controls.Add(rightFlow, 2, 0);
+
+            var mouseFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                BackColor = Color.Transparent,
+            };
 
             _chkMouseMode = new CheckBox
             {
-                Text = "Mouse mode (MVP)",
+                Text = "Mouse mode",
                 Checked = false,
                 AutoSize = true,
                 ForeColor = TXT_DIM,
                 BackColor = Color.Transparent,
                 Font = FONT_SM,
-                Location = new Point(702, 10),
+                Margin = new Padding(0, 6, 0, 0),
             };
             _chkMouseMode.CheckedChanged += (sender, args) =>
             {
@@ -468,9 +641,9 @@ namespace Joycon2PC.App
                     _mouseModeEnabled = _chkMouseMode.Checked;
                     ResetMouseModeState(releasePressedButtons: true);
                 }
-                Log($"Mouse mode {( _mouseModeEnabled ? "enabled" : "disabled")}.", ACCENT);
+                Log($"Mouse mode {(_mouseModeEnabled ? "enabled" : "disabled") }.", ACCENT);
             };
-            modulePanel.Controls.Add(_chkMouseMode);
+            mouseFlow.Controls.Add(_chkMouseMode);
 
             _cmbMouseStabilizer = new ComboBox
             {
@@ -478,7 +651,8 @@ namespace Joycon2PC.App
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(472, 8, 112, 24),
+                Width = 116,
+                Margin = new Padding(10, 3, 0, 0),
             };
             _cmbMouseStabilizer.Items.AddRange(new object[] { "Stab: Raw", "Stab: Stable", "Stab: VStable" });
             _cmbMouseStabilizer.SelectedIndex = 1;
@@ -495,7 +669,7 @@ namespace Joycon2PC.App
                     ResetMouseModeState(releasePressedButtons: true);
                 }
             };
-            modulePanel.Controls.Add(_cmbMouseStabilizer);
+            mouseFlow.Controls.Add(_cmbMouseStabilizer);
 
             _cmbMouseSpeed = new ComboBox
             {
@@ -503,7 +677,8 @@ namespace Joycon2PC.App
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(590, 8, 106, 24),
+                Width = 110,
+                Margin = new Padding(8, 3, 0, 0),
             };
             _cmbMouseSpeed.Items.AddRange(new object[] { "Mouse: Fast", "Mouse: Normal", "Mouse: Slow" });
             _cmbMouseSpeed.SelectedIndex = 1;
@@ -520,46 +695,86 @@ namespace Joycon2PC.App
                     ResetMouseModeState(releasePressedButtons: true);
                 }
             };
-            modulePanel.Controls.Add(_cmbMouseSpeed);
+            mouseFlow.Controls.Add(_cmbMouseSpeed);
+            controlsGrid.Controls.Add(mouseFlow, 0, 1);
 
-            _chkConnectSound.Location = new Point(816, 10);
+            _lblConnectModeStatus = MakeLabel("Pair state: Idle", 8, new Point(0, 0), color: TXT_DIM);
+            _lblConnectModeStatus.AutoSize = true;
+            _lblConnectModeStatus.Margin = new Padding(0, 3, 0, 0);
+            controlsGrid.Controls.Add(_lblConnectModeStatus, 1, 1);
+            controlsGrid.SetColumnSpan(_lblConnectModeStatus, 2);
 
-            // ── Rumble row (disabled — BLE rumble not yet supported) ─────
-            modulePanel.Controls.Add(MakeLabel("Rumble", 8, new Point(12, 76), color: TXT_DIM));
-            _cmbRumblePreset = new ComboBox
+            var stagePanel = new TableLayoutPanel
             {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = FONT_SM,
-                BackColor = PANEL_ALT,
-                ForeColor = TXT_DIM,
-                Bounds = new Rectangle(58, 72, 170, 24),
-                Enabled = false,
+                Dock = DockStyle.Fill,
+                BackColor = Color.Transparent,
+                ColumnCount = 4,
+                RowCount = 1,
+                Margin = new Padding(0, 0, 0, 0),
             };
-            modulePanel.Controls.Add(_cmbRumblePreset);
+            stagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            stagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            stagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            stagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
-            _btnTestRumble = new Button
+            _lblStageScan = new Label
             {
-                Text = "Rumble (N/A)",
-                BackColor = PANEL_ALT,
+                Text = "Scan",
+                AutoSize = true,
                 ForeColor = TXT_DIM,
-                FlatStyle = FlatStyle.Flat,
+                BackColor = PANEL_ALT,
                 Font = FONT_SM,
-                Bounds = new Rectangle(238, 70, 100, 28),
-                Enabled = false,
+                Padding = new Padding(8, 3, 8, 3),
+                Margin = new Padding(0, 1, 6, 0),
             };
-            _btnTestRumble.FlatAppearance.BorderSize = 1;
-            _btnTestRumble.FlatAppearance.BorderColor = BORDER;
-            modulePanel.Controls.Add(_btnTestRumble);
+            stagePanel.Controls.Add(_lblStageScan, 0, 0);
 
-            var lblModuleHint = MakeLabel("0x01=click  0x02=low-bat  0x03=reconnect  0x04=connect  | Rumble via BLE not yet supported", 8, new Point(352, 76), color: TXT_DIM);
-            lblModuleHint.MaximumSize = new Size(600, 0);
-            lblModuleHint.AutoSize = true;
-            modulePanel.Controls.Add(lblModuleHint);
+            _lblStageInit = new Label
+            {
+                Text = "Init",
+                AutoSize = true,
+                ForeColor = TXT_DIM,
+                BackColor = PANEL_ALT,
+                Font = FONT_SM,
+                Padding = new Padding(8, 3, 8, 3),
+                Margin = new Padding(0, 1, 6, 0),
+            };
+            stagePanel.Controls.Add(_lblStageInit, 1, 0);
+
+            _lblStageReady = new Label
+            {
+                Text = "Ready",
+                AutoSize = true,
+                ForeColor = TXT_DIM,
+                BackColor = PANEL_ALT,
+                Font = FONT_SM,
+                Padding = new Padding(8, 3, 8, 3),
+                Margin = new Padding(0, 1, 8, 0),
+            };
+            stagePanel.Controls.Add(_lblStageReady, 2, 0);
+
+            _prgConnectStage = new ProgressBar
+            {
+                Dock = DockStyle.Fill,
+                Style = ProgressBarStyle.Continuous,
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                Margin = new Padding(0, 3, 0, 0),
+            };
+            stagePanel.Controls.Add(_prgConnectStage, 3, 0);
+
+            controlsGrid.Controls.Add(stagePanel, 1, 2);
+            controlsGrid.SetColumnSpan(stagePanel, 2);
 
             InitializeOptionControls();
 
             // kick off ViGEm check
             _ = Task.Run(CheckViGEmAsync);
+
+            _healthTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _healthTimer.Tick += (sender, args) => UpdateLinkHealthSummary();
+            _healthTimer.Start();
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -583,6 +798,235 @@ namespace Joycon2PC.App
             BackColor = STICK_BG,
             BorderStyle = BorderStyle.FixedSingle,
         };
+
+        private void UpdateConnectModeStatusLabel(string state, Color? color = null)
+        {
+            if (_lblConnectModeStatus == null || _lblConnectModeStatus.IsDisposed)
+                return;
+
+            _lblConnectModeStatus.Text = $"Pair state: {state}";
+            _lblConnectModeStatus.ForeColor = color ?? TXT_DIM;
+
+            int stageValue;
+            if (state.Contains("Ready", StringComparison.OrdinalIgnoreCase))
+                stageValue = 3;
+            else if (state.Contains("Init", StringComparison.OrdinalIgnoreCase) || state.Contains("Recycling", StringComparison.OrdinalIgnoreCase))
+                stageValue = 2;
+            else if (state.Contains("Scan", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("Pair", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("No controller", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("reconnecting", StringComparison.OrdinalIgnoreCase))
+                stageValue = 1;
+            else
+                stageValue = 0;
+
+            bool isWarning = state.Contains("reconnecting", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("retry", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("No controller", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("silent", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("Disconnected", StringComparison.OrdinalIgnoreCase);
+
+            bool isError = state.Contains("failed", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("error", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("not installed", StringComparison.OrdinalIgnoreCase);
+
+            Color activeColor = isError ? RED : isWarning ? YELLOW : ACCENT;
+            ApplyConnectStageVisual(stageValue, activeColor);
+
+            if (stageValue >= 3)
+                _lastReadyUtc = DateTime.UtcNow;
+
+            UpdateLinkHealthSummary();
+        }
+
+        private void ApplyConnectStageVisual(int stageValue, Color activeColor)
+        {
+            if (_prgConnectStage == null || _prgConnectStage.IsDisposed)
+                return;
+
+            stageValue = Math.Max(0, Math.Min(3, stageValue));
+            int progress = stageValue switch
+            {
+                0 => 0,
+                1 => 34,
+                2 => 68,
+                _ => 100,
+            };
+
+            _prgConnectStage.Value = progress;
+            SetStageCapsule(_lblStageScan, stageValue >= 1, activeColor);
+            SetStageCapsule(_lblStageInit, stageValue >= 2, activeColor);
+            SetStageCapsule(_lblStageReady, stageValue >= 3, activeColor);
+        }
+
+        private static void SetStageCapsule(Label label, bool active, Color activeColor)
+        {
+            if (label == null || label.IsDisposed)
+                return;
+
+            label.BackColor = active ? activeColor : PANEL_ALT;
+            label.ForeColor = active ? Color.White : TXT_DIM;
+        }
+
+        private void UpdateLinkHealthSummary()
+        {
+            if (_lblLinkHealth == null || _lblLinkHealth.IsDisposed)
+                return;
+
+            string reportText = _lastInputReportUtc == DateTime.MinValue
+                ? "n/a"
+                : $"{(DateTime.UtcNow - _lastInputReportUtc).TotalMilliseconds:0} ms ago";
+            string readyText = _lastReadyUtc == DateTime.MinValue
+                ? "n/a"
+                : $"{(DateTime.UtcNow - _lastReadyUtc).TotalSeconds:0}s";
+
+            _lblLinkHealth.Text = $"Last report: {reportText} | Last ready: {readyText} | Reconnects: {_reconnectAttemptCount}";
+
+            if (!_running)
+            {
+                _lblLinkHealth.ForeColor = TXT_DIM;
+                return;
+            }
+
+            if (_lastInputReportUtc == DateTime.MinValue)
+            {
+                _lblLinkHealth.ForeColor = YELLOW;
+                return;
+            }
+
+            var silence = DateTime.UtcNow - _lastInputReportUtc;
+            if (silence >= TimeSpan.FromSeconds(6))
+                _lblLinkHealth.ForeColor = RED;
+            else if (silence >= TimeSpan.FromSeconds(2))
+                _lblLinkHealth.ForeColor = YELLOW;
+            else
+                _lblLinkHealth.ForeColor = GREEN;
+        }
+
+        private void ExportLogToFile()
+        {
+            using var dialog = new System.Windows.Forms.SaveFileDialog
+            {
+                Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+                FileName = $"joycon2pc-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
+                Title = "Export Joycon2PC logs",
+            };
+
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                var lines = new List<string>
+                {
+                    $"Joycon2PC log export @ {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
+                    $"Pair status: {_lblConnectModeStatus.Text}",
+                    _lblLinkHealth != null ? $"Link health: {_lblLinkHealth.Text}" : string.Empty,
+                    string.Empty,
+                    "Entries:",
+                };
+
+                foreach (var entry in _logEntries)
+                {
+                    string audience = entry.Audience == LogAudience.Developer ? "DEV" : "USR";
+                    lines.Add($"[{entry.TimeText}] [{audience}] {entry.Message}");
+                }
+
+                File.WriteAllLines(dialog.FileName, lines);
+                Log($"Logs exported: {dialog.FileName}", GREEN);
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to export logs: {ex.Message}", YELLOW);
+            }
+        }
+
+        private async Task CopyRecentIssueSummaryToClipboardAsync()
+        {
+            if (_logEntries.Count == 0)
+            {
+                Log("No logs available to summarize yet.", TXT_DIM);
+                await FlashCopySummaryButtonAsync("No logs", YELLOW, Color.Black, 900);
+                return;
+            }
+
+            bool IsIssueEntry(LogEntry e)
+            {
+                var msg = e.Message;
+                return msg.Contains("error", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("fail", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("retry", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("reconnect", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("silent", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("disconnected", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("not installed", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var selected = new List<LogEntry>();
+            for (int i = _logEntries.Count - 1; i >= 0 && selected.Count < 12; i--)
+            {
+                var entry = _logEntries[i];
+                if (IsIssueEntry(entry))
+                    selected.Add(entry);
+            }
+
+            if (selected.Count == 0)
+            {
+                for (int i = Math.Max(0, _logEntries.Count - 8); i < _logEntries.Count; i++)
+                    selected.Add(_logEntries[i]);
+            }
+
+            selected.Reverse();
+
+            var lines = new List<string>
+            {
+                $"Joycon2PC issue summary ({DateTime.Now:yyyy-MM-dd HH:mm:ss})",
+                $"Current pair state: {_lblConnectModeStatus.Text}",
+                "",
+                "Recent relevant logs:",
+            };
+
+            foreach (var entry in selected)
+                lines.Add($"[{entry.TimeText}] {entry.Message}");
+
+            string summary = string.Join(Environment.NewLine, lines);
+            try
+            {
+                Clipboard.SetText(summary);
+                Log("Issue summary copied to clipboard.", GREEN);
+                await FlashCopySummaryButtonAsync("Copied", GREEN, Color.White, 1100);
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to copy issue summary: {ex.Message}", YELLOW);
+                await FlashCopySummaryButtonAsync("Copy failed", RED, Color.White, 1400);
+            }
+        }
+
+        private async Task FlashCopySummaryButtonAsync(string text, Color backColor, Color foreColor, int durationMs)
+        {
+            if (_btnCopyLogSummary == null || _btnCopyLogSummary.IsDisposed)
+                return;
+
+            int version = Interlocked.Increment(ref _copySummaryFeedbackVersion);
+            string oldText = _btnCopyLogSummary.Text;
+            Color oldBack = _btnCopyLogSummary.BackColor;
+            Color oldFore = _btnCopyLogSummary.ForeColor;
+
+            _btnCopyLogSummary.Text = text;
+            _btnCopyLogSummary.BackColor = backColor;
+            _btnCopyLogSummary.ForeColor = foreColor;
+
+            await Task.Delay(Math.Max(150, durationMs));
+
+            if (_btnCopyLogSummary.IsDisposed || version != _copySummaryFeedbackVersion)
+                return;
+
+            _btnCopyLogSummary.Text = oldText;
+            _btnCopyLogSummary.BackColor = oldBack;
+            _btnCopyLogSummary.ForeColor = oldFore;
+        }
 
         private void AddButtonIndicator(Control parent, string name, Point loc, Color? onColor = null)
         {
@@ -619,18 +1063,9 @@ namespace Joycon2PC.App
                 _bridge = new Joycon2PC.ViGEm.ViGEmBridge();
                 _bridge.Connect();
 
-                // Forward XInput rumble commands back to physical Joy-Con 2 controllers.
-                // Games that use rumble will cause the Joy-Con 2 to vibrate.
-                _bridge.RumbleReceived += (large, small) =>
-                {
-                    var sc = _scanner;
-                    if (sc != null)
-                        _ = sc.SendRumbleAsync(large, small);
-                };
-
                     Invoke(() =>
                 {
-                    _lblVigemStatus.Text      = "✔  Driver found — virtual controller ready";
+                    _lblVigemStatus.Text      = "Driver found and ready";
                     _lblVigemStatus.ForeColor = GREEN;
                     Log("ViGEmBus driver found. Virtual Xbox 360 controller is ready.", GREEN);
                 });
@@ -639,7 +1074,7 @@ namespace Joycon2PC.App
             {
                     Invoke(() =>
                 {
-                    _lblVigemStatus.Text      = "✘  ViGEmBus driver NOT installed";
+                    _lblVigemStatus.Text      = "ViGEmBus not installed";
                     _lblVigemStatus.ForeColor = RED;
                     Log("ViGEmBus driver not found! Install it from:", RED);
                     Log("  https://github.com/nefarius/ViGEmBus/releases", ACCENT);
@@ -655,39 +1090,55 @@ namespace Joycon2PC.App
         // is unreliable and often never fires), then restart the scan loop immediately.
         private void OnReconnectClicked()
         {
-            Log("⟳ Reconnect pressed — clearing BLE state and restarting scan…", YELLOW);
-            _lblJoyconStatus.Text      = "Reconnecting…";
-            _lblJoyconStatus.ForeColor = YELLOW;
+            _ = PerformHardReconnectAsync("manual reconnect");
+        }
 
-            // Force-clear all stale device entries so GetKnownDeviceIds() returns 0
-            // and the wait loop in RunRealAsync exits immediately.
-            _scanner?.DisconnectAll();
-            _deviceStates.Clear();
-            _leftDeviceId  = null;
-            _rightDeviceId = null;
-            _deviceLStickSentinel.Clear();
-            _deviceRStickSentinel.Clear();
+        private async Task PerformHardReconnectAsync(string reason)
+        {
+            if (_reconnectInProgress || IsDisposed)
+                return;
 
-            if (!_running)
+            var now = DateTime.UtcNow;
+            if ((now - _lastReconnectRequestUtc) < RECONNECT_MIN_INTERVAL)
             {
-                StartAll();
+                Log("Reconnect ignored: request too frequent.", TXT_DIM);
                 return;
             }
+            _lastReconnectRequestUtc = now;
+            _reconnectAttemptCount++;
+            UpdateLinkHealthSummary();
 
-            // Cancel current RunRealAsync iteration so the outer while-loop restarts
-            _cts?.Cancel();
-            _cts = new CancellationTokenSource();
-            _ = Task.Delay(400).ContinueWith(_ =>
+            _reconnectInProgress = true;
+            try
             {
+                Log($"⟳ Reconnect ({reason}) — fully restarting BLE loop…", YELLOW);
+                _lblJoyconStatus.Text = "Reconnecting…";
+                _lblJoyconStatus.ForeColor = YELLOW;
+                UpdateConnectModeStatusLabel("Recycling BLE session", YELLOW);
+
+                _scanner?.DisconnectAll();
+                _deviceStates.Clear();
+                _leftDeviceId = null;
+                _rightDeviceId = null;
+                _deviceLStickSentinel.Clear();
+                _deviceRStickSentinel.Clear();
+
+                bool wasRunning = _running;
+                if (wasRunning)
+                    StopAll();
+
+                var settleDelay = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)
+                    ? RECONNECT_SETTLE_WIN11
+                    : RECONNECT_SETTLE_WIN10;
+                await Task.Delay(settleDelay);
+
                 if (!IsDisposed)
-                    BeginInvoke(() =>
-                    {
-                        _running = true;
-#if INTHEHAND
-                        _ = RunRealAsync(_cts.Token);
-#endif
-                    });
-            });
+                    StartAll();
+            }
+            finally
+            {
+                _reconnectInProgress = false;
+            }
         }
 
         private void OnStartClicked(object? s, EventArgs e)
@@ -704,10 +1155,18 @@ namespace Joycon2PC.App
 
         private void StartAll()
         {
+            if (_running && _cts is { IsCancellationRequested: false })
+            {
+                DevLog("Start ignored: BLE loop already running.", TXT_DIM);
+                return;
+            }
+
             _running = true;
+            _lastInputReportUtc = DateTime.MinValue;
             _cts     = new CancellationTokenSource();
             _btnStart.Text      = "Stop";
             _btnStart.BackColor = BTN_STOP;
+            UpdateLinkHealthSummary();
 
             // Attach parser → bridge
             _parser.StateChanged -= OnStateChanged;
@@ -716,11 +1175,13 @@ namespace Joycon2PC.App
 
 #if INTHEHAND
             Log("Searching for Joy-Con over Bluetooth LE...", ACCENT);
+            DevLog("Connection mode: Auto pair (L + R)", TXT_DIM);
         var os = Environment.OSVersion.Version;
         bool isWin11OrNewer = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
         DevLog($"OS {os.Major}.{os.Minor}.{os.Build} ({(isWin11OrNewer ? "Win11+" : "Win10 compatibility mode")})", TXT_DIM);
             _lblJoyconStatus.Text      = "Scanning...";
             _lblJoyconStatus.ForeColor = YELLOW;
+                UpdateConnectModeStatusLabel("Scanning", YELLOW);
             _ = RunRealAsync(_cts.Token);
 #endif
         }
@@ -729,11 +1190,13 @@ namespace Joycon2PC.App
         {
             _cts?.Cancel();
             _running = false;
-            _btnStart.Text      = "Start Scan";
+            _btnStart.Text      = "Connect Joy-Cons";
             _btnStart.BackColor = BTN_PRIMARY;
             _btnReconnect.BackColor = BTN_SECONDARY;
             _lblJoyconStatus.Text      = "Stopped";
             _lblJoyconStatus.ForeColor = TXT_DIM;
+            UpdateConnectModeStatusLabel("Stopped", TXT_DIM);
+            UpdateLinkHealthSummary();
             Log("Stopped.", TXT_DIM);
         }
 
@@ -806,6 +1269,7 @@ namespace Joycon2PC.App
                 scanner.RawReportReceived += (deviceId, data) =>
                 {
                     lastReportUtc = DateTime.UtcNow;
+                    _lastInputReportUtc = lastReportUtc;
                     string shortId = deviceId.Length > 8 ? deviceId[..8] : deviceId;
 
                     // Hex dump first 3 reports per device
@@ -1001,10 +1465,12 @@ namespace Joycon2PC.App
                     }
                 };
 
+                using var scanTimeout = new CancellationTokenSource(30_000);
+                var scanReadySignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
                 // ── Immediate status update when a device connects ────────
                 // DeviceConnected fires during ScanAsync (not after), so the UI
-                // shows "Connected" the moment GATT subscription succeeds — no
-                // need to wait for the full 30-second scan window to close.
+                // shows "Connected" the moment GATT subscription succeeds.
                 scanner.DeviceConnected += (deviceId, devName) =>
                 {
                     try
@@ -1016,6 +1482,17 @@ namespace Joycon2PC.App
                             _lblJoyconStatus.ForeColor = GREEN;
                             Log($"✔ Connected: {shortName}", GREEN);
                             RefreshDeviceTargetOptions(scanner);
+
+                            int knownCount = scanner.GetKnownDeviceIds().Length;
+                            if (knownCount >= 2)
+                            {
+                                UpdateConnectModeStatusLabel("Pair ready (2/2)", GREEN);
+                                scanReadySignal.TrySetResult(true);
+                            }
+                            else
+                            {
+                                UpdateConnectModeStatusLabel($"Pairing ({knownCount}/2)", YELLOW);
+                            }
                         });
                     }
                     catch { }
@@ -1026,14 +1503,30 @@ namespace Joycon2PC.App
                 {
                     _lblJoyconStatus.Text      = "Scanning…";
                     _lblJoyconStatus.ForeColor = YELLOW;
+                    UpdateConnectModeStatusLabel("Scanning", YELLOW);
                     Log("Checking paired devices + scanning for advertising ones…", ACCENT);
                     Log("Tip: Joy-Con 2 already paired in Windows? — it will connect automatically.", TXT_DIM);
                 });
 
-                using var scanTimeout = new CancellationTokenSource(30_000);
                 using var linkedScan  = CancellationTokenSource.CreateLinkedTokenSource(ct, scanTimeout.Token);
-                try   { await scanner.ScanAsync(linkedScan.Token); }
-                catch { /* scan cancelled or timed out */ }
+                var scanTask = scanner.ScanAsync(linkedScan.Token);
+                try
+                {
+                    var completed = await Task.WhenAny(scanTask, scanReadySignal.Task);
+                    if (completed == scanReadySignal.Task)
+                    {
+                        scanTimeout.Cancel();
+                        await Task.Delay(120, ct);
+                    }
+                    else
+                    {
+                        await scanTask;
+                    }
+                }
+                catch
+                {
+                    // scan cancelled or timed out
+                }
 
                 if (ct.IsCancellationRequested) break;
 
@@ -1046,6 +1539,7 @@ namespace Joycon2PC.App
                         Log("Make sure Joy-Con 2 is paired in Windows Bluetooth Settings.", TXT_DIM);
                         _lblJoyconStatus.Text      = "Retrying…";
                         _lblJoyconStatus.ForeColor = YELLOW;
+                        UpdateConnectModeStatusLabel("No controller, retrying", YELLOW);
                     });
                     try { await Task.Delay(3_000, ct); } catch { break; }
                     continue;
@@ -1056,15 +1550,16 @@ namespace Joycon2PC.App
 
                 Invoke(() =>
                 {
-                    bool dual = ids.Length >= 2;
+                    bool dual = _leftDeviceId != null && _rightDeviceId != null && _leftDeviceId != _rightDeviceId;
                     string lId = _leftDeviceId?[..Math.Min(8, _leftDeviceId.Length)] ?? "?";
                     string rId = _rightDeviceId?[..Math.Min(8, _rightDeviceId.Length)] ?? "?";
                     string msg = dual
-                        ? $"Both Joy-Cons connected! L={lId}  R={rId}"
+                        ? $"Joy-Con pair connected! L={lId}  R={rId}"
                         : $"Joy-Con 2 connected ({ids[0][..Math.Min(12, ids[0].Length)]})";
                     Log(msg, GREEN);
-                    _lblJoyconStatus.Text      = dual ? "L + R Connected ✔" : "Connected ✔";
+                    _lblJoyconStatus.Text = dual ? "Joy-Con Pair Connected ✔" : "Connected ✔";
                     _lblJoyconStatus.ForeColor = GREEN;
+                    UpdateConnectModeStatusLabel("Pair ready", GREEN);
                     RefreshDeviceTargetOptions(scanner);
                 });
 
@@ -1075,9 +1570,13 @@ namespace Joycon2PC.App
                 // Win10 typically needs a longer settle delay and more retries than Win11.
                 var inputModeInit = GetInputModeInitProfile();
                 try { await Task.Delay(inputModeInit.InitialDelayMs, ct); } catch { break; }
+                Invoke(() => UpdateConnectModeStatusLabel("Initializing command channel", ACCENT));
                 await InitializeCommandChannelAsync(scanner, sortedIds, ct);
+                Invoke(() => UpdateConnectModeStatusLabel("Initializing input stream", ACCENT));
                 await ConfigureContinuousInputModeAsync(scanner, sortedIds, inputModeInit, ct);
+                Invoke(() => UpdateConnectModeStatusLabel("Initializing feedback", ACCENT));
                 await ApplyConnectFeedbackAsync(scanner, sortedIds, ct);
+                Invoke(() => UpdateConnectModeStatusLabel("Ready", GREEN));
 
                 // ── Wait: stay here until all devices disconnect or user stops ─
                 while (!ct.IsCancellationRequested)
@@ -1096,6 +1595,7 @@ namespace Joycon2PC.App
                             Log($"BLE link silent for {silence.TotalSeconds:F1}s with {knownCount} known device(s) — forcing reconnect.", YELLOW);
                             _lblJoyconStatus.Text      = "Link silent — reconnecting…";
                             _lblJoyconStatus.ForeColor = YELLOW;
+                            UpdateConnectModeStatusLabel("Link silent, reconnecting", YELLOW);
                         });
                         scanner.DisconnectAll();
                         break;
@@ -1110,6 +1610,7 @@ namespace Joycon2PC.App
                     Log("Joy-Con disconnected — reconnecting…", YELLOW);
                     _lblJoyconStatus.Text      = "Reconnecting…";
                     _lblJoyconStatus.ForeColor = YELLOW;
+                    UpdateConnectModeStatusLabel("Disconnected, reconnecting", YELLOW);
                 });
                 try { await Task.Delay(2_000, ct); } catch { break; }
             }
@@ -1118,6 +1619,7 @@ namespace Joycon2PC.App
             {
                 _lblJoyconStatus.Text      = "Stopped";
                 _lblJoyconStatus.ForeColor = TXT_DIM;
+                UpdateConnectModeStatusLabel("Stopped", TXT_DIM);
             });
         }
 
@@ -1310,25 +1812,59 @@ namespace Joycon2PC.App
         private async Task ApplyConnectFeedbackAsync(BLEScanner scanner, string[] sortedIds, CancellationToken ct)
         {
             var soundSettings = GetConnectSoundSettings();
+            int feedbackAttempts = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000) ? 2 : 4;
+
+            async Task<bool> SendWithRetryAsync(string deviceId, byte[] payload, string tag)
+            {
+                for (int attempt = 1; attempt <= feedbackAttempts && !ct.IsCancellationRequested; attempt++)
+                {
+                    bool ok;
+                    try
+                    {
+                        ok = await scanner.SendSubcommandAsync(deviceId, payload, tag, ct);
+                    }
+                    catch
+                    {
+                        ok = false;
+                    }
+
+                    if (ok)
+                        return true;
+
+                    if (attempt < feedbackAttempts)
+                    {
+                        try { await Task.Delay(80 * attempt, ct); }
+                        catch { return false; }
+                    }
+                }
+
+                return false;
+            }
 
             for (int p = 0; p < sortedIds.Length; p++)
             {
                 string id = sortedIds[p];
                 string side = ResolveDeviceSideLabel(scanner, id);
-                int playerNum = p + 1;
+                int playerNum = CONNECT_FEEDBACK_PLAYER_NUM;
 
                 try
                 {
                     // joycon2cpp-exact LED command path.
-                    await scanner.SendSubcommandAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2PlayerLedCompat(playerNum), $"led-cpp-p{playerNum}", ct);
-                    Invoke(() => Log($"  Joy-Con {side} LED confirmed (P{playerNum})", ACCENT));
+                    bool ledOk = await SendWithRetryAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2PlayerLedCompat(playerNum), $"led-cpp-p{playerNum}");
+                    if (ledOk)
+                        Invoke(() => Log($"  Joy-Con {side} LED confirmed (shared P{playerNum})", ACCENT));
+                    else
+                        Invoke(() => Log($"  Joy-Con {side} LED send failed after retries", YELLOW));
 
                     if (soundSettings.Enabled)
                     {
                         await Task.Delay(25, ct);
-                        await scanner.SendSubcommandAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2SoundCompat(soundSettings.Preset), $"sound-cpp-0x{soundSettings.Preset:X2}", ct);
+                        bool soundOk = await SendWithRetryAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2SoundCompat(soundSettings.Preset), $"sound-cpp-0x{soundSettings.Preset:X2}");
                         byte preset = soundSettings.Preset;
-                        Invoke(() => Log($"  Joy-Con {side} connect sound sent (0x{preset:X2})", ACCENT));
+                        if (soundOk)
+                            Invoke(() => Log($"  Joy-Con {side} connect sound sent (0x{preset:X2})", ACCENT));
+                        else
+                            Invoke(() => Log($"  Joy-Con {side} connect sound failed (0x{preset:X2})", YELLOW));
                     }
                 }
                 catch (Exception ex)
@@ -1423,6 +1959,12 @@ namespace Joycon2PC.App
                 uint lB = _deviceStates.TryGetValue(_leftDeviceId!,  out var lsBtn) ? lsBtn.Buttons & L_MASK : 0u;
                 uint rB = _deviceStates.TryGetValue(_rightDeviceId!, out var rsBtn) ? rsBtn.Buttons & R_MASK : 0u;
                 merged.Buttons = lB | rB;
+            }
+            else if (isSingleDevice)
+            {
+                // Single mode should only consume the selected device's buttons.
+                if (_leftDeviceId != null && _deviceStates.TryGetValue(_leftDeviceId, out var singleState))
+                    merged.Buttons = singleState.Buttons;
             }
             else
             {
@@ -1802,8 +2344,10 @@ namespace Joycon2PC.App
 
         private void InitializeOptionControls()
         {
+            UpdateConnectModeStatusLabel("Idle", TXT_DIM);
+
             _cmbDeviceTarget.Items.Clear();
-            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "All connected Joy-Cons", DeviceId = null });
+            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "Connected pair", DeviceId = null });
             _cmbDeviceTarget.SelectedIndex = 0;
 
             _cmbSoundPreset.Items.AddRange(new object[]
@@ -1834,19 +2378,6 @@ namespace Joycon2PC.App
             });
             _cmbLedPattern.SelectedIndex = 1;
 
-            _cmbRumblePreset.Items.AddRange(new object[]
-            {
-                new RumblePresetOption { Label = "Short pulse", LargeMotor = 255, SmallMotor = 255, DurationMs = 120 },
-                new RumblePresetOption { Label = "Medium pulse", LargeMotor = 255, SmallMotor = 255, DurationMs = 220 },
-                new RumblePresetOption { Label = "Long pulse", LargeMotor = 255, SmallMotor = 255, DurationMs = 360 },
-            });
-            _cmbRumblePreset.SelectedIndex = 1;
-
-            // Joy-Con 2 BLE rumble is not supported — joycon2cpp has no rumble implementation.
-            // The 0x50 keep-alive format does not trigger the HD Rumble actuator.
-            _btnTestRumble.Enabled   = false;
-            _btnTestRumble.Text      = "Rumble (N/A)";
-            _cmbRumblePreset.Enabled = false;
         }
 
         private void RefreshDeviceTargetOptions(BLEScanner? scanner)
@@ -1862,7 +2393,7 @@ namespace Joycon2PC.App
 
             string? previousId = (_cmbDeviceTarget.SelectedItem as DeviceTargetOption)?.DeviceId;
             _cmbDeviceTarget.Items.Clear();
-            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "All connected Joy-Cons", DeviceId = null });
+            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "Connected setup (pair/single)", DeviceId = null });
 
             if (scanner != null)
             {
@@ -1907,10 +2438,6 @@ namespace Joycon2PC.App
 
         private byte GetSelectedLedPattern()
             => (_cmbLedPattern?.SelectedItem as ByteOption)?.Value ?? 0x01;
-
-        private RumblePresetOption GetSelectedRumblePreset()
-            => (_cmbRumblePreset?.SelectedItem as RumblePresetOption)
-            ?? new RumblePresetOption { Label = "Medium pulse", LargeMotor = 255, SmallMotor = 255, DurationMs = 220 };
 
         private (bool Enabled, byte Preset) GetConnectSoundSettings()
         {
@@ -1991,41 +2518,6 @@ namespace Joycon2PC.App
                 if (sent)
                     Log($"Manual LED applied to Joy-Con {side} (0x{pattern:X2}).", ACCENT);
             }
-        }
-
-        private async Task TriggerManualRumbleTestAsync()
-        {
-            var scanner = _scanner;
-            if (scanner == null)
-            {
-                Log("No active BLE session. Connect Joy-Con first.", YELLOW);
-                return;
-            }
-
-            var targetIds = GetSelectedTargetDeviceIds(scanner);
-            if (targetIds.Length == 0)
-            {
-                Log("No connected Joy-Con available for rumble test.", YELLOW);
-                return;
-            }
-
-            var preset = GetSelectedRumblePreset();
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-
-            foreach (var id in targetIds)
-            {
-                string side = ResolveDeviceSideLabel(scanner, id);
-                bool started = await scanner.SendRumbleAsync(id, preset.LargeMotor, preset.SmallMotor, $"manual-rumble-{preset.DurationMs}ms-on", cts.Token, allowOff: true);
-                if (!started)
-                    continue;
-
-                Log($"Manual rumble pulse sent to Joy-Con {side} ({preset.Label}).", ACCENT);
-            }
-
-            try { await Task.Delay(preset.DurationMs, cts.Token); } catch { return; }
-
-            foreach (var id in targetIds)
-                await scanner.SendRumbleAsync(id, 0, 0, $"manual-rumble-{preset.DurationMs}ms-off", cts.Token, allowOff: true);
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -2196,6 +2688,9 @@ namespace Joycon2PC.App
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             _cts?.Cancel();
+            _healthTimer?.Stop();
+            _healthTimer?.Dispose();
+            _healthTimer = null;
             if (_powerEventsSubscribed)
             {
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
