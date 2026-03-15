@@ -184,6 +184,9 @@ namespace Joycon2PC.Core
         /// </summary>
         public static byte[] BuildNS2GenericCommand(byte commandId, byte subcommandId, byte[]? data = null)
         {
+            if (data != null && data.Length > 8)
+                throw new ArgumentException("NS2 generic command payload must be <= 8 bytes.", nameof(data));
+
             int dataLen = Math.Min(8, data?.Length ?? 0);
             var cmd = new byte[8 + dataLen];
             cmd[0] = commandId;
