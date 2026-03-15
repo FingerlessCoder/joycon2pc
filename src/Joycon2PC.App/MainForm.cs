@@ -968,6 +968,13 @@ namespace Joycon2PC.App
 
                     state.Buttons = stableButtons;
 
+                    string? singleActiveId = GetSingleModeActiveDeviceId();
+                    if (singleActiveId != null && !string.Equals(deviceId, singleActiveId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _deviceStates.Remove(deviceId);
+                        return;
+                    }
+
                     _deviceStates[deviceId] = state;
 
                     ApplyMouseModeFromDevice(deviceId, data, state);
@@ -1451,6 +1458,20 @@ namespace Joycon2PC.App
             return _connectMode == ConnectMode.SingleLeft ? isLeft : isRight;
         }
 
+        private string? GetSingleModeActiveDeviceId()
+        {
+            if (_connectMode == ConnectMode.AutoPair)
+                return null;
+
+            if (string.IsNullOrWhiteSpace(_leftDeviceId) || string.IsNullOrWhiteSpace(_rightDeviceId))
+                return null;
+
+            if (!string.Equals(_leftDeviceId, _rightDeviceId, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return _leftDeviceId;
+        }
+
         private readonly struct InputModeInitProfile
         {
             public InputModeInitProfile(int initialDelayMs, int attempts, int retryDelayMs)
@@ -1653,6 +1674,12 @@ namespace Joycon2PC.App
                 uint lB = _deviceStates.TryGetValue(_leftDeviceId!,  out var lsBtn) ? lsBtn.Buttons & L_MASK : 0u;
                 uint rB = _deviceStates.TryGetValue(_rightDeviceId!, out var rsBtn) ? rsBtn.Buttons & R_MASK : 0u;
                 merged.Buttons = lB | rB;
+            }
+            else if (isSingleDevice)
+            {
+                // Single mode should only consume the selected device's buttons.
+                if (_leftDeviceId != null && _deviceStates.TryGetValue(_leftDeviceId, out var singleState))
+                    merged.Buttons = singleState.Buttons;
             }
             else
             {
