@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using System.Threading;
 using System.Threading.Tasks;
@@ -103,12 +104,38 @@ namespace Joycon2PC.App
         private Button _btnApplyLed     = null!;
         private Button _btnTestRumble   = null!;
         private CheckBox _chkConnectSound = null!;
+        private CheckBox _chkMouseMode = null!;
+        private ComboBox _cmbMouseSpeed = null!;
         private ComboBox _cmbLogMode = null!;
         private ComboBox _cmbDeviceTarget = null!;
         private ComboBox _cmbSoundPreset = null!;
         private ComboBox _cmbLedPattern = null!;
         private ComboBox _cmbRumblePreset = null!;
         private RichTextBox _log        = null!;
+
+        private bool _mouseModeEnabled;
+        private bool _mouseFirstOpticalRead = true;
+        private short _mouseLastOpticalX;
+        private short _mouseLastOpticalY;
+        private bool _mouseLeftPressed;
+        private bool _mouseRightPressed;
+        private bool _mouseMiddlePressed;
+        private double _mousePendingMoveX;
+        private double _mousePendingMoveY;
+        private DateTime _mouseLastMoveUtc = DateTime.MinValue;
+
+        private const int MOUSE_OPTICAL_DEADZONE = 1;
+        private const int MOUSE_OPTICAL_DELTA_CLAMP = 90;
+        private const int MOUSE_DISPATCH_INTERVAL_MS = 6;
+
+        private enum MouseSpeedMode
+        {
+            Fast,
+            Normal,
+            Slow,
+        }
+
+        private MouseSpeedMode _mouseSpeedMode = MouseSpeedMode.Normal;
 
         private JoyConVisualizerPanel _joyconViz = null!;
 
@@ -408,6 +435,48 @@ namespace Joycon2PC.App
                 Location = new Point(790, 10),
             };
             modulePanel.Controls.Add(_chkConnectSound);
+
+            _chkMouseMode = new CheckBox
+            {
+                Text = "Mouse mode (MVP)",
+                Checked = false,
+                AutoSize = true,
+                ForeColor = TXT_DIM,
+                BackColor = Color.Transparent,
+                Font = FONT_SM,
+                Location = new Point(702, 10),
+            };
+            _chkMouseMode.CheckedChanged += (sender, args) =>
+            {
+                _mouseModeEnabled = _chkMouseMode.Checked;
+                ResetMouseModeState(releasePressedButtons: true);
+                Log($"Mouse mode {( _mouseModeEnabled ? "enabled" : "disabled")}.", ACCENT);
+            };
+            modulePanel.Controls.Add(_chkMouseMode);
+
+            _cmbMouseSpeed = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = FONT_SM,
+                BackColor = PANEL_ALT,
+                ForeColor = TXT,
+                Bounds = new Rectangle(590, 8, 106, 24),
+            };
+            _cmbMouseSpeed.Items.AddRange(new object[] { "Mouse: Fast", "Mouse: Normal", "Mouse: Slow" });
+            _cmbMouseSpeed.SelectedIndex = 1;
+            _cmbMouseSpeed.SelectedIndexChanged += (sender, args) =>
+            {
+                _mouseSpeedMode = _cmbMouseSpeed.SelectedIndex switch
+                {
+                    0 => MouseSpeedMode.Fast,
+                    2 => MouseSpeedMode.Slow,
+                    _ => MouseSpeedMode.Normal,
+                };
+                ResetMouseModeState(releasePressedButtons: false);
+            };
+            modulePanel.Controls.Add(_cmbMouseSpeed);
+
+            _chkConnectSound.Location = new Point(816, 10);
 
             // ── Rumble row (disabled — BLE rumble not yet supported) ─────
             modulePanel.Controls.Add(MakeLabel("Rumble", 8, new Point(12, 76), color: TXT_DIM));
@@ -801,6 +870,8 @@ namespace Joycon2PC.App
                     state.Buttons = stableButtons;
 
                     _deviceStates[deviceId] = state;
+
+                    ApplyMouseModeFromDevice(deviceId, data, state);
 
                     // ── Debug: log only when buttons change or stick moves >80 counts ──
                     // (Never BeginInvoke on every report — that floods the UI thread queue)
@@ -1386,6 +1457,189 @@ namespace Joycon2PC.App
             if (string.IsNullOrWhiteSpace(raw)) return false;
             if (string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase)) return true;
             return bool.TryParse(raw, out bool enabled) && enabled;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MouseInput
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct InputUnion
+        {
+            public MouseInput mi;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeInput
+        {
+            public uint type;
+            public InputUnion U;
+        }
+
+        private const uint INPUT_MOUSE = 0;
+        private const uint MOUSEEVENTF_MOVE = 0x0001;
+        private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+        private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+        private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
+        private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(uint nInputs, NativeInput[] pInputs, int cbSize);
+
+        private static bool IsRightMouseButtonController(JoyconState state)
+            => state.IsPressed(SW2Button.R)
+            || state.IsPressed(SW2Button.ZR)
+            || state.IsPressed(SW2Button.RStick)
+            || state.IsPressed(SW2Button.A)
+            || state.IsPressed(SW2Button.B)
+            || state.IsPressed(SW2Button.X)
+            || state.IsPressed(SW2Button.Y)
+            || state.IsPressed(SW2Button.C)
+            || state.IsPressed(SW2Button.Home)
+            || state.IsPressed(SW2Button.Plus);
+
+        private static short ReadInt16LE(byte lo, byte hi)
+            => (short)(lo | (hi << 8));
+
+        private float GetMouseSensitivity()
+            => _mouseSpeedMode switch
+            {
+                MouseSpeedMode.Fast => 1.0f,
+                MouseSpeedMode.Slow => 0.3f,
+                _ => 0.6f,
+            };
+
+        private void SendMouseButton(uint downFlag, uint upFlag, bool pressed, ref bool previous)
+        {
+            if (pressed == previous)
+                return;
+
+            previous = pressed;
+            SendMouseInput(0, 0, pressed ? downFlag : upFlag);
+        }
+
+        private void SendMouseInput(int dx, int dy, uint flags)
+        {
+            var input = new NativeInput
+            {
+                type = INPUT_MOUSE,
+                U = new InputUnion
+                {
+                    mi = new MouseInput
+                    {
+                        dx = dx,
+                        dy = dy,
+                        mouseData = 0,
+                        dwFlags = flags,
+                        time = 0,
+                        dwExtraInfo = IntPtr.Zero,
+                    }
+                }
+            };
+
+            _ = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
+        }
+
+        private void ResetMouseModeState(bool releasePressedButtons)
+        {
+            _mouseFirstOpticalRead = true;
+            _mouseLastOpticalX = 0;
+            _mouseLastOpticalY = 0;
+            _mousePendingMoveX = 0;
+            _mousePendingMoveY = 0;
+            _mouseLastMoveUtc = DateTime.MinValue;
+
+            if (releasePressedButtons)
+            {
+                SendMouseButton(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, false, ref _mouseLeftPressed);
+                SendMouseButton(MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, false, ref _mouseRightPressed);
+                SendMouseButton(MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, false, ref _mouseMiddlePressed);
+            }
+            else
+            {
+                _mouseLeftPressed = false;
+                _mouseRightPressed = false;
+                _mouseMiddlePressed = false;
+            }
+        }
+
+        private void ApplyMouseModeFromDevice(string deviceId, byte[] data, JoyconState state)
+        {
+            if (!_mouseModeEnabled)
+                return;
+
+            // Dual-device mode: hard-lock mouse source to the assigned right Joy-Con.
+            // Fallback to button-heuristic only before side assignment is available.
+            if (!string.IsNullOrWhiteSpace(_rightDeviceId))
+            {
+                if (!string.Equals(deviceId, _rightDeviceId, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+            else if (!IsRightMouseButtonController(state))
+            {
+                return;
+            }
+
+            int off = data.Length > 0 && data[0] == 0xA1 ? 1 : 0;
+            if (data.Length < off + 0x14)
+                return;
+
+            short rawX = ReadInt16LE(data[off + 0x10], data[off + 0x11]);
+            short rawY = ReadInt16LE(data[off + 0x12], data[off + 0x13]);
+
+            if (_mouseFirstOpticalRead)
+            {
+                _mouseLastOpticalX = rawX;
+                _mouseLastOpticalY = rawY;
+                _mouseFirstOpticalRead = false;
+                return;
+            }
+
+            int dx = rawX - _mouseLastOpticalX;
+            int dy = rawY - _mouseLastOpticalY;
+            _mouseLastOpticalX = rawX;
+            _mouseLastOpticalY = rawY;
+
+            // Reject tiny optical noise and clamp spikes from occasional sensor bursts.
+            if (Math.Abs(dx) <= MOUSE_OPTICAL_DEADZONE)
+                dx = 0;
+            if (Math.Abs(dy) <= MOUSE_OPTICAL_DEADZONE)
+                dy = 0;
+
+            dx = Math.Clamp(dx, -MOUSE_OPTICAL_DELTA_CLAMP, MOUSE_OPTICAL_DELTA_CLAMP);
+            dy = Math.Clamp(dy, -MOUSE_OPTICAL_DELTA_CLAMP, MOUSE_OPTICAL_DELTA_CLAMP);
+
+            float sensitivity = GetMouseSensitivity();
+            _mousePendingMoveX += dx * sensitivity;
+            _mousePendingMoveY += dy * sensitivity;
+
+            var now = DateTime.UtcNow;
+            if ((now - _mouseLastMoveUtc).TotalMilliseconds >= MOUSE_DISPATCH_INTERVAL_MS)
+            {
+                int moveX = (int)Math.Truncate(_mousePendingMoveX);
+                int moveY = (int)Math.Truncate(_mousePendingMoveY);
+                if (moveX != 0 || moveY != 0)
+                {
+                    _mousePendingMoveX -= moveX;
+                    _mousePendingMoveY -= moveY;
+                    SendMouseInput(moveX, moveY, MOUSEEVENTF_MOVE);
+                }
+                _mouseLastMoveUtc = now;
+            }
+
+            // cpp mapping: R=left click, ZR=right click, RStick=middle click.
+            SendMouseButton(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, state.IsPressed(SW2Button.R), ref _mouseLeftPressed);
+            SendMouseButton(MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, state.IsPressed(SW2Button.ZR), ref _mouseRightPressed);
+            SendMouseButton(MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, state.IsPressed(SW2Button.RStick), ref _mouseMiddlePressed);
         }
 
         private void InitializeOptionControls()
