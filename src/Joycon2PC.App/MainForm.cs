@@ -1054,10 +1054,12 @@ namespace Joycon2PC.App
                     }
                 };
 
+                using var scanTimeout = new CancellationTokenSource(30_000);
+                var scanReadySignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
                 // ── Immediate status update when a device connects ────────
                 // DeviceConnected fires during ScanAsync (not after), so the UI
-                // shows "Connected" the moment GATT subscription succeeds — no
-                // need to wait for the full 30-second scan window to close.
+                // shows "Connected" the moment GATT subscription succeeds.
                 scanner.DeviceConnected += (deviceId, devName) =>
                 {
                     try
@@ -1069,6 +1071,26 @@ namespace Joycon2PC.App
                             _lblJoyconStatus.ForeColor = GREEN;
                             Log($"✔ Connected: {shortName}", GREEN);
                             RefreshDeviceTargetOptions(scanner);
+
+                            if (_connectMode == ConnectMode.AutoPair)
+                            {
+                                if (scanner.GetKnownDeviceIds().Length >= 2)
+                                    scanReadySignal.TrySetResult(true);
+                                return;
+                            }
+
+                            string wanted = _connectMode == ConnectMode.SingleLeft ? "Left" : "Right";
+                            bool isTarget = MatchesRequestedSingleModeSide(scanner, deviceId, devName);
+                            if (isTarget)
+                            {
+                                scanReadySignal.TrySetResult(true);
+                            }
+                            else
+                            {
+                                Log($"Ignoring non-target side in single mode. Waiting for {wanted} Joy-Con.", TXT_DIM);
+                                _lblJoyconStatus.Text = $"Waiting for {wanted} Joy-Con...";
+                                _lblJoyconStatus.ForeColor = YELLOW;
+                            }
                         });
                     }
                     catch { }
@@ -1083,10 +1105,26 @@ namespace Joycon2PC.App
                     Log("Tip: Joy-Con 2 already paired in Windows? — it will connect automatically.", TXT_DIM);
                 });
 
-                using var scanTimeout = new CancellationTokenSource(30_000);
                 using var linkedScan  = CancellationTokenSource.CreateLinkedTokenSource(ct, scanTimeout.Token);
-                try   { await scanner.ScanAsync(linkedScan.Token); }
-                catch { /* scan cancelled or timed out */ }
+                var scanTask = scanner.ScanAsync(linkedScan.Token);
+                try
+                {
+                    var completed = await Task.WhenAny(scanTask, scanReadySignal.Task);
+                    if (completed == scanReadySignal.Task)
+                    {
+                        // Continue quickly after target-side connection in the chosen mode.
+                        scanTimeout.Cancel();
+                        await Task.Delay(120, ct);
+                    }
+                    else
+                    {
+                        await scanTask;
+                    }
+                }
+                catch
+                {
+                    // scan cancelled or timed out
+                }
 
                 if (ct.IsCancellationRequested) break;
 
@@ -1395,6 +1433,22 @@ namespace Joycon2PC.App
             }
 
             return new[] { knownIds[0] };
+        }
+
+        private bool MatchesRequestedSingleModeSide(BLEScanner scanner, string deviceId, string deviceName)
+        {
+            string name = deviceName ?? string.Empty;
+            ushort pid = scanner.GetProductId(deviceId);
+
+            bool isLeft = name.Contains("(L)", StringComparison.OrdinalIgnoreCase) || pid == BLEScanner.PID_JOYCON_L;
+            bool isRight = name.Contains("(R)", StringComparison.OrdinalIgnoreCase) || pid == BLEScanner.PID_JOYCON_R;
+
+            if (!isLeft && _deviceRStickSentinel.TryGetValue(deviceId, out var rSentinel) && rSentinel)
+                isLeft = true;
+            if (!isRight && _deviceLStickSentinel.TryGetValue(deviceId, out var lSentinel) && lSentinel)
+                isRight = true;
+
+            return _connectMode == ConnectMode.SingleLeft ? isLeft : isRight;
         }
 
         private readonly struct InputModeInitProfile
