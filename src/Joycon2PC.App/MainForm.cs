@@ -172,6 +172,8 @@ namespace Joycon2PC.App
         private bool _reconnectInProgress;
         private DateTime _lastReconnectRequestUtc = DateTime.MinValue;
         private static readonly TimeSpan RECONNECT_MIN_INTERVAL = TimeSpan.FromMilliseconds(900);
+        private static readonly TimeSpan RECONNECT_SETTLE_WIN10 = TimeSpan.FromMilliseconds(1200);
+        private static readonly TimeSpan RECONNECT_SETTLE_WIN11 = TimeSpan.FromMilliseconds(380);
 
         private JoyConVisualizerPanel _joyconViz = null!;
 
@@ -730,7 +732,10 @@ namespace Joycon2PC.App
                 if (wasRunning)
                     StopAll();
 
-                await Task.Delay(260);
+                var settleDelay = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)
+                    ? RECONNECT_SETTLE_WIN11
+                    : RECONNECT_SETTLE_WIN10;
+                await Task.Delay(settleDelay);
 
                 if (!IsDisposed)
                     StartAll();
@@ -1158,12 +1163,15 @@ namespace Joycon2PC.App
                     Invoke(() =>
                     {
                         string wanted = _connectMode == ConnectMode.SingleLeft ? "Left" : "Right";
-                        Log($"Single Joy-Con mode: target {wanted} side not identified yet. Retry after powering on only that side.", YELLOW);
+                        Log($"Single Joy-Con mode: target {wanted} side not identified yet. Retrying...", YELLOW);
+                        Log($"Tip: wake the {wanted} Joy-Con (press Home or any face button) before retry.", TXT_DIM);
                         _lblJoyconStatus.Text = $"Waiting for {wanted} Joy-Con...";
                         _lblJoyconStatus.ForeColor = YELLOW;
                     });
 
-                    try { await Task.Delay(2_000, ct); } catch { break; }
+                    // We found devices but not the requested side; recycle quickly to avoid sticky sessions.
+                    scanner.DisconnectAll();
+                    try { await Task.Delay(1_200, ct); } catch { break; }
                     continue;
                 }
 
