@@ -23,7 +23,7 @@ namespace Joycon2PC.App.Bluetooth
     // â”€â”€ NS2 GATT UUIDs (from Nohzockt/Switch2-Controllers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private const string NS2_SERVICE_UUID = "ab7de9be-89fe-49ad-828f-118f09df7fd0";
     private const string NS2_INPUT_UUID   = "ab7de9be-89fe-49ad-828f-118f09df7fd2"; // notify
-    private const string NS2_OUTPUT_UUID  = "ab7de9be-89fe-49ad-828f-118f09df7fd1"; // write
+    private const string NS2_OUTPUT_UUID  = "649d4ac9-8eb7-4e6c-af44-1ea54fe5f005"; // write, matches joycon2cpp
 
     // NS2 Product IDs (from PnP ID characteristic)
     public const ushort PID_JOYCON_L = 0x6605;
@@ -31,12 +31,20 @@ namespace Joycon2PC.App.Bluetooth
 
     // Track device writable characteristic per device id
     private readonly Dictionary<string, GattCharacteristic?> _writableCharacteristics = new();
+    // Track device ids that have active NS2 input notifications.
+    private readonly HashSet<string> _subscribedInputDevices = new();
     // Subcommand managers per device id for reliable sends
     private readonly Dictionary<string, Joycon2PC.Core.SubcommandManager> _subManagers = new();
     // Product IDs per device id (from PnP ID characteristic)
     private readonly Dictionary<string, ushort> _deviceProductIds = new();
     // Device names per device id (e.g. "Joy-Con 2 (L)", "Joy-Con 2 (R)")
     private readonly Dictionary<string, string> _deviceNames = new();
+
+    /// <summary>
+    /// Outbound/internals diagnostic trace stream.
+    /// Parameters: (deviceId, message).
+    /// </summary>
+    public event Action<string, string>? DiagnosticTrace;
 
     /// <summary>
     /// Invoked when raw notification reports arrive from a specific device.
@@ -60,6 +68,23 @@ namespace Joycon2PC.App.Bluetooth
 
     private static string ShortId(string deviceId)
         => deviceId.Length > 8 ? deviceId[..8] : deviceId;
+
+    private static string Hex(byte[] data)
+        => data == null || data.Length == 0 ? "<empty>" : BitConverter.ToString(data);
+
+    private void TraceWrite(string deviceId, string message)
+    {
+        string line = $"[{DateTime.Now:HH:mm:ss.fff}] [{ShortId(deviceId)}] {message}";
+        Console.WriteLine(line);
+        try { DiagnosticTrace?.Invoke(deviceId, line); } catch { }
+    }
+
+    private void TraceInfo(string deviceId, string message)
+    {
+        string line = $"[{DateTime.Now:HH:mm:ss.fff}] [{ShortId(deviceId)}] {message}";
+        Console.WriteLine(line);
+        try { DiagnosticTrace?.Invoke(deviceId, line); } catch { }
+    }
 
     private async Task<bool> StartNotificationsWithRetryAsync(
         string deviceId,
@@ -101,11 +126,14 @@ namespace Joycon2PC.App.Bluetooth
         lock (_writableCharacteristics)
         {
             bool removed = _writableCharacteristics.Remove(deviceId);
+            _subscribedInputDevices.Remove(deviceId);
             _subManagers.Remove(deviceId);
             _deviceProductIds.Remove(deviceId);
             _deviceNames.Remove(deviceId);
             if (removed)
-                Console.WriteLine($"Removed device [{ShortId(deviceId)}]: {reason}");
+                TraceInfo(deviceId, $"Removed writable device: {reason}");
+            else
+                TraceInfo(deviceId, $"Removed notify-only device: {reason}");
         }
     }
 
@@ -233,7 +261,7 @@ namespace Joycon2PC.App.Bluetooth
                 string svcUuid = svc.Uuid.ToString().ToLowerInvariant();
                 Console.WriteLine($"    Service: {svcUuid}");
 
-                if (!svcUuid.Contains(NS2_SERVICE_UUID[..8]))
+                if (!string.Equals(svcUuid, NS2_SERVICE_UUID, StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine("      (not NS2, skipping)");
                     continue;
@@ -256,11 +284,12 @@ namespace Joycon2PC.App.Bluetooth
                 foreach (var ch in chars)
                 {
                     string chUuid = ch.Uuid.ToString().ToLowerInvariant();
-                    if (chUuid.Contains("7fd1") &&
-                        (ch.Properties.HasFlag(GattCharacteristicProperties.Write) ||
-                         ch.Properties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse)))
+                    TraceInfo(deviceId, $"Characteristic discovered uuid={chUuid} prop={ch.Properties}");
+
+                    if (string.Equals(chUuid, NS2_OUTPUT_UUID, StringComparison.OrdinalIgnoreCase))
                     {
-                        Console.WriteLine($"      â˜… NS2 OUTPUT (writable) â€” registered in pass 1");
+                        Console.WriteLine($"      â˜… NS2 OUTPUT (write command) â€” registered in pass 1");
+                        TraceInfo(deviceId, $"NS2 OUTPUT discovered prop={ch.Properties}");
                         RegisterWritable(deviceId, ch);
                     }
                 }
@@ -271,10 +300,10 @@ namespace Joycon2PC.App.Bluetooth
                     string chUuid = ch.Uuid.ToString().ToLowerInvariant();
                     Console.WriteLine($"      Char: {chUuid} Prop={ch.Properties}");
 
-                    if (chUuid.Contains("7fd1"))
+                    if (string.Equals(chUuid, NS2_OUTPUT_UUID, StringComparison.OrdinalIgnoreCase))
                         Console.WriteLine("      â˜… NS2 OUTPUT (already registered in pass 1)");
 
-                    if (chUuid.Contains("7fd2") &&
+                    if (string.Equals(chUuid, NS2_INPUT_UUID, StringComparison.OrdinalIgnoreCase) &&
                         (ch.Properties.HasFlag(GattCharacteristicProperties.Notify) ||
                          ch.Properties.HasFlag(GattCharacteristicProperties.Indicate)))
                     {
@@ -300,6 +329,10 @@ namespace Joycon2PC.App.Bluetooth
                             Console.WriteLine("      Warning: NS2 INPUT notification setup failed after retries.");
                             continue;
                         }
+
+                        lock (_writableCharacteristics)
+                            _subscribedInputDevices.Add(deviceId);
+                        TraceInfo(deviceId, "NS2 INPUT notifications active");
                         subscribedInput = true;
 
                         // Send SPI calibration read IMMEDIATELY after subscribing.
@@ -317,21 +350,45 @@ namespace Joycon2PC.App.Bluetooth
                                     0xD0, 0x3D, 0x06, 0x00,
                                     0x00, 0x00, 0x00, 0x00
                                 };
+                                TraceWrite(deviceId, $"TX SPI-INIT len={spiRead.Length} hex={Hex(spiRead)}");
                                 await wch.WriteValueWithoutResponseAsync(spiRead);
                                 Console.WriteLine($"      âœ“ SPI calibration init sent to {deviceId[..Math.Min(8, deviceId.Length)]}");
                             }
                             else
                             {
                                 Console.WriteLine("      âš  SPI init skipped â€” no writable char found (pass 1 missed OUTPUT)");
+                                TraceInfo(deviceId, "SPI init skipped: no writable characteristic registered");
                             }
                         }
                         catch (Exception spiEx)
                         {
                             Console.WriteLine($"      SPI init warning (non-fatal): {spiEx.Message}");
+                            TraceInfo(deviceId, $"SPI init exception: {spiEx.Message}");
                         }
                     }
                 }
             }
+
+            if (!_writableCharacteristics.ContainsKey(deviceId))
+            {
+                TraceInfo(deviceId, "Exact NS2 output UUID not found; falling back to first writable characteristic if available");
+                foreach (var svc in services)
+                {
+                    var chars = await svc.GetCharacteristicsAsync();
+                    foreach (var ch in chars)
+                    {
+                        if (ch.Properties.HasFlag(GattCharacteristicProperties.Write) ||
+                            ch.Properties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse))
+                        {
+                            RegisterWritable(deviceId, ch);
+                            TraceInfo(deviceId, $"Fallback writable selected uuid={ch.Uuid}");
+                            goto writable_found;
+                        }
+                    }
+                }
+            }
+
+        writable_found:
             // Notify listeners immediately — before ScanAsync() finishes its 30-second window.
             if (foundNS2 && subscribedInput)
                 DeviceConnected?.Invoke(deviceId, name);
@@ -343,6 +400,7 @@ namespace Joycon2PC.App.Bluetooth
             if (!foundNS2)
             {
                 Console.WriteLine("    âš  NS2 service not found â€” falling back to all characteristics");
+                TraceInfo(deviceId, "NS2 service not found; fallback characteristic scan");
                 foreach (var svc in services)
                 {
                     var chars = await svc.GetCharacteristicsAsync();
@@ -363,6 +421,9 @@ namespace Joycon2PC.App.Bluetooth
                             try
                             {
                                 await StartNotificationsWithRetryAsync(deviceId, ch, cancellationToken);
+                                lock (_writableCharacteristics)
+                                    _subscribedInputDevices.Add(deviceId);
+                                TraceInfo(deviceId, $"Fallback notify active on {ch.Uuid}");
                             }
                             catch { }
                         }
@@ -371,6 +432,7 @@ namespace Joycon2PC.App.Bluetooth
                              ch.Properties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse)))
                         {
                             RegisterWritable(deviceId, ch);
+                            TraceInfo(deviceId, $"Fallback writable registered on {ch.Uuid}");
                         }
                     }
                 }
@@ -390,12 +452,22 @@ namespace Joycon2PC.App.Bluetooth
 
     private void RegisterWritable(string deviceId, GattCharacteristic ch)
     {
-        _writableCharacteristics[deviceId] = ch;
+        lock (_writableCharacteristics)
+            _writableCharacteristics[deviceId] = ch;
+        TraceInfo(deviceId, $"Writable characteristic registered prop={ch.Properties}");
+
         _subManagers[deviceId] = new Joycon2PC.Core.SubcommandManager(async (payload, ct2) =>
         {
-            try { await ch.WriteValueWithoutResponseAsync(payload); return true; }
+            try
+            {
+                TraceWrite(deviceId, $"TX RELIABLE len={payload.Length} hex={Hex(payload)}");
+                await ch.WriteValueWithoutResponseAsync(payload);
+                TraceWrite(deviceId, "TX RELIABLE result=OK");
+                return true;
+            }
             catch (Exception ex)
             {
+                TraceWrite(deviceId, $"TX RELIABLE result=FAIL err={ex.Message}");
                 Console.WriteLine($"Write failed [{ShortId(deviceId)}]: {ex.Message}");
                 RemoveKnownDevice(deviceId, "write failure in SubcommandManager");
                 return false;
@@ -404,25 +476,38 @@ namespace Joycon2PC.App.Bluetooth
     }
 
     public async Task<bool> SendSubcommandAsync(string deviceId, byte[] payload, CancellationToken ct = default)
+        => await SendSubcommandAsync(deviceId, payload, tag: null, ct);
+
+    public async Task<bool> SendSubcommandAsync(string deviceId, byte[] payload, string? tag, CancellationToken ct = default)
     {
-        if (!_writableCharacteristics.TryGetValue(deviceId, out var ch) || ch == null)
+        GattCharacteristic? ch;
+        lock (_writableCharacteristics)
+            _writableCharacteristics.TryGetValue(deviceId, out ch);
+
+        if (ch == null)
         {
             Console.WriteLine($"No writable characteristic known for device {deviceId}");
+            TraceWrite(deviceId, "TX DIRECT skipped=no-writable-char");
             return false;
         }
 
         try
         {
             ct.ThrowIfCancellationRequested();
+            string label = string.IsNullOrWhiteSpace(tag) ? "TX DIRECT" : $"TX DIRECT tag={tag}";
+            TraceWrite(deviceId, $"{label} len={payload.Length} hex={Hex(payload)}");
             await ch.WriteValueWithoutResponseAsync(payload);
+            TraceWrite(deviceId, $"{label} result=OK");
             return true;
         }
         catch (OperationCanceledException)
         {
+            TraceWrite(deviceId, $"TX DIRECT result=CANCELLED tag={tag ?? "<none>"}");
             throw;
         }
         catch (Exception ex)
         {
+            TraceWrite(deviceId, $"TX DIRECT result=FAIL tag={tag ?? "<none>"} err={ex.Message}");
             Console.WriteLine($"Write failed to {deviceId}: {ex.Message}");
             RemoveKnownDevice(deviceId, "write failure in SendSubcommandAsync");
             return false;
@@ -443,8 +528,7 @@ namespace Joycon2PC.App.Bluetooth
     {
         lock (_writableCharacteristics)
         {
-            var keys = new string[_writableCharacteristics.Count];
-            _writableCharacteristics.Keys.CopyTo(keys, 0);
+            var keys = _subscribedInputDevices.ToArray();
             return keys;
         }
     }
@@ -461,6 +545,7 @@ namespace Joycon2PC.App.Bluetooth
         {
             Console.WriteLine($"DisconnectAll: clearing {_writableCharacteristics.Count} device(s)");
             _writableCharacteristics.Clear();
+            _subscribedInputDevices.Clear();
             _subManagers.Clear();
             _deviceProductIds.Clear();
             _deviceNames.Clear();
@@ -473,28 +558,35 @@ namespace Joycon2PC.App.Bluetooth
     /// </summary>
     public async Task SendRumbleAsync(byte large, byte small)
     {
-        // Skip zero-rumble OS polls — they produce 0x50 packets that confuse the controller
-        // and cause ghost inputs (R-stick drift, phantom L/ZL presses).
-        if (large == 0 && small == 0) return;
-
-        // Convert 0-255 XInput motor power to 0.0-1.0 amplitude
-        float amp = Math.Max(large, small) / 255f;
-        var payload = Joycon2PC.Core.SubcommandBuilder.BuildNS2Rumble(amp > 0.01f);
+        if (large == 0 && small == 0)
+            return;
 
         string[] ids;
         lock (_writableCharacteristics)
             ids = _writableCharacteristics.Keys.ToArray();
 
         foreach (var id in ids)
-        {
-            if (!_writableCharacteristics.TryGetValue(id, out var ch) || ch == null) continue;
-            try { await ch.WriteValueWithoutResponseAsync(payload); }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Rumble write failed [{ShortId(id)}]: {ex.Message}");
-                RemoveKnownDevice(id, "write failure in SendRumbleAsync");
-            }
-        }
+            await SendRumbleAsync(id, large, small, tag: null, CancellationToken.None, allowOff: false);
+    }
+
+    public Task<bool> SendRumbleAsync(
+        string deviceId,
+        byte large,
+        byte small,
+        string? tag,
+        CancellationToken ct = default,
+        bool allowOff = false)
+    {
+        bool rumbleOn = Math.Max(large, small) > 2;
+        if (!rumbleOn && !allowOff)
+            return Task.FromResult(false);
+
+        var payload = Joycon2PC.Core.SubcommandBuilder.BuildNS2Rumble(rumbleOn);
+        string effectiveTag = string.IsNullOrWhiteSpace(tag)
+            ? (rumbleOn ? "rumble-on" : "rumble-off")
+            : tag;
+
+        return SendSubcommandAsync(deviceId, payload, effectiveTag, ct);
     }
 #else
         // Default placeholder implementation (compiled by default).

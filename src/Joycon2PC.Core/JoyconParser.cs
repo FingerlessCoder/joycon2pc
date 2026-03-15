@@ -94,12 +94,16 @@ namespace Joycon2PC.Core
             }
 
             // Sticks — 12-bit packed at logical [10..15]
+            // Sentinel 0x7FF (2047) = axis not present on this Joy-Con side; treat as neutral.
+            // Value 0 also means no data; treat as neutral (1998).
             if (r.Length >= off + 16)
             {
-                state.LeftStickX  = r[off + 10] | ((r[off + 11] & 0x0F) << 8);
-                state.LeftStickY  = (r[off + 11] >> 4) | (r[off + 12] << 4);
-                state.RightStickX = r[off + 13] | ((r[off + 14] & 0x0F) << 8);
-                state.RightStickY = (r[off + 14] >> 4) | (r[off + 15] << 4);
+                static int Neutral(int v) => (v == 0 || v == 2047) ? 1998 : v;
+
+                state.LeftStickX  = Neutral(r[off + 10] | ((r[off + 11] & 0x0F) << 8));
+                state.LeftStickY  = Neutral((r[off + 11] >> 4) | (r[off + 12] << 4));
+                state.RightStickX = Neutral(r[off + 13] | ((r[off + 14] & 0x0F) << 8));
+                state.RightStickY = Neutral((r[off + 14] >> 4) | (r[off + 15] << 4));
             }
 
             StateChanged?.Invoke(state);
