@@ -151,6 +151,7 @@ namespace Joycon2PC.App
 
         private MouseSpeedMode _mouseSpeedMode = MouseSpeedMode.Normal;
         private MouseStabilizerMode _mouseStabilizerMode = MouseStabilizerMode.Stable;
+        private const int CONNECT_FEEDBACK_PLAYER_NUM = 1;
 
         private JoyConVisualizerPanel _joyconViz = null!;
 
@@ -335,7 +336,7 @@ namespace Joycon2PC.App
 
             _btnStart = new Button
             {
-                Text      = "Start Scan",
+                Text      = "Connect Joy-Cons",
                 BackColor = BTN_PRIMARY,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -373,10 +374,10 @@ namespace Joycon2PC.App
             };
             Controls.Add(modulePanel);
 
-            var lblModuleTitle = MakeLabel("Quick Controls", 10, new Point(10, 8), bold: true, color: ACCENT);
+            var lblModuleTitle = MakeLabel("Single-Player Controls", 10, new Point(10, 8), bold: true, color: ACCENT);
             modulePanel.Controls.Add(lblModuleTitle);
 
-            modulePanel.Controls.Add(MakeLabel("Target", 8, new Point(12, 40), color: TXT_DIM));
+            modulePanel.Controls.Add(MakeLabel("Device", 8, new Point(12, 40), color: TXT_DIM));
             _cmbDeviceTarget = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
@@ -441,7 +442,7 @@ namespace Joycon2PC.App
 
             _chkConnectSound = new CheckBox
             {
-                Text = "Connect sound",
+                Text = "Play connect sound",
                 Checked = true,
                 AutoSize = true,
                 ForeColor = TXT_DIM,
@@ -453,7 +454,7 @@ namespace Joycon2PC.App
 
             _chkMouseMode = new CheckBox
             {
-                Text = "Mouse mode (MVP)",
+                Text = "Mouse mode",
                 Checked = false,
                 AutoSize = true,
                 ForeColor = TXT_DIM,
@@ -551,7 +552,7 @@ namespace Joycon2PC.App
             _btnTestRumble.FlatAppearance.BorderColor = BORDER;
             modulePanel.Controls.Add(_btnTestRumble);
 
-            var lblModuleHint = MakeLabel("0x01=click  0x02=low-bat  0x03=reconnect  0x04=connect  | Rumble via BLE not yet supported", 8, new Point(352, 76), color: TXT_DIM);
+            var lblModuleHint = MakeLabel("Auto-connect sets the pair to P1 LED by default. Rumble via BLE not yet supported.", 8, new Point(352, 76), color: TXT_DIM);
             lblModuleHint.MaximumSize = new Size(600, 0);
             lblModuleHint.AutoSize = true;
             modulePanel.Controls.Add(lblModuleHint);
@@ -729,7 +730,7 @@ namespace Joycon2PC.App
         {
             _cts?.Cancel();
             _running = false;
-            _btnStart.Text      = "Start Scan";
+            _btnStart.Text      = "Connect Joy-Cons";
             _btnStart.BackColor = BTN_PRIMARY;
             _btnReconnect.BackColor = BTN_SECONDARY;
             _lblJoyconStatus.Text      = "Stopped";
@@ -1060,10 +1061,10 @@ namespace Joycon2PC.App
                     string lId = _leftDeviceId?[..Math.Min(8, _leftDeviceId.Length)] ?? "?";
                     string rId = _rightDeviceId?[..Math.Min(8, _rightDeviceId.Length)] ?? "?";
                     string msg = dual
-                        ? $"Both Joy-Cons connected! L={lId}  R={rId}"
+                        ? $"Joy-Con pair connected! L={lId}  R={rId}"
                         : $"Joy-Con 2 connected ({ids[0][..Math.Min(12, ids[0].Length)]})";
                     Log(msg, GREEN);
-                    _lblJoyconStatus.Text      = dual ? "L + R Connected ✔" : "Connected ✔";
+                    _lblJoyconStatus.Text      = dual ? "Joy-Con Pair Connected ✔" : "Connected ✔";
                     _lblJoyconStatus.ForeColor = GREEN;
                     RefreshDeviceTargetOptions(scanner);
                 });
@@ -1315,13 +1316,13 @@ namespace Joycon2PC.App
             {
                 string id = sortedIds[p];
                 string side = ResolveDeviceSideLabel(scanner, id);
-                int playerNum = p + 1;
+                int playerNum = CONNECT_FEEDBACK_PLAYER_NUM;
 
                 try
                 {
                     // joycon2cpp-exact LED command path.
                     await scanner.SendSubcommandAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2PlayerLedCompat(playerNum), $"led-cpp-p{playerNum}", ct);
-                    Invoke(() => Log($"  Joy-Con {side} LED confirmed (P{playerNum})", ACCENT));
+                    Invoke(() => Log($"  Joy-Con {side} LED confirmed (shared P{playerNum})", ACCENT));
 
                     if (soundSettings.Enabled)
                     {
@@ -1803,7 +1804,7 @@ namespace Joycon2PC.App
         private void InitializeOptionControls()
         {
             _cmbDeviceTarget.Items.Clear();
-            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "All connected Joy-Cons", DeviceId = null });
+            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "Connected setup (pair/single)", DeviceId = null });
             _cmbDeviceTarget.SelectedIndex = 0;
 
             _cmbSoundPreset.Items.AddRange(new object[]
@@ -1862,7 +1863,7 @@ namespace Joycon2PC.App
 
             string? previousId = (_cmbDeviceTarget.SelectedItem as DeviceTargetOption)?.DeviceId;
             _cmbDeviceTarget.Items.Clear();
-            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "All connected Joy-Cons", DeviceId = null });
+            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "Connected setup (pair/single)", DeviceId = null });
 
             if (scanner != null)
             {
