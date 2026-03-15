@@ -179,6 +179,95 @@ namespace Joycon2PC.Core
         }
 
         /// <summary>
+        /// Build a generic NS2 command frame matching joycon2cpp exactly:
+        /// [cmdId, 0x91, 0x01, subCmdId, 0x00, dataLen, 0x00, 0x00, data...]
+        /// </summary>
+        public static byte[] BuildNS2GenericCommand(byte commandId, byte subcommandId, byte[]? data = null)
+        {
+            int dataLen = Math.Min(8, data?.Length ?? 0);
+            var cmd = new byte[8 + dataLen];
+            cmd[0] = commandId;
+            cmd[1] = 0x91;
+            cmd[2] = 0x01;
+            cmd[3] = subcommandId;
+            cmd[4] = 0x00;
+            cmd[5] = (byte)dataLen;
+            cmd[6] = 0x00;
+            cmd[7] = 0x00;
+
+            if (dataLen > 0 && data != null)
+            {
+                Buffer.BlockCopy(data, 0, cmd, 8, dataLen);
+            }
+
+            return cmd;
+        }
+
+        /// <summary>
+        /// Build the two init toggle commands used by joycon2cpp before LED/sound.
+        /// </summary>
+        public static byte[][] BuildNS2CustomInitCommands()
+            => new byte[][]
+            {
+                new byte[] { 0x0C, 0x91, 0x01, 0x02, 0x00, 0x04, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00 },
+                new byte[] { 0x0C, 0x91, 0x01, 0x04, 0x00, 0x04, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00 },
+            };
+
+        /// <summary>
+        /// Build NS2 player LED using joycon2cpp command IDs (CMD 0x09, SUB 0x07).
+        /// </summary>
+        public static byte[] BuildNS2PlayerLedCompat(int playerNum = 1)
+        {
+            byte[] ledMap = { 0x01, 0x02, 0x04, 0x08, 0x03, 0x06, 0x0C, 0x0F };
+            byte ledValue = ledMap[Math.Clamp(playerNum - 1, 0, 7)];
+            return BuildNS2PlayerLedCompatRaw(ledValue);
+        }
+
+        public static byte[] BuildNS2PlayerLedCompatRaw(byte pattern)
+        {
+            var data = new byte[8];
+            data[0] = pattern;
+            return BuildNS2GenericCommand(0x09, 0x07, data);
+        }
+
+        /// <summary>
+        /// Build an NS2 sound command (short onboard tone).
+        /// <paramref name="presetId"/> defaults to 0x04, matching known working preset.
+        /// Returns a 16-byte output report.
+        /// Format: [0x30,0x01,0x00,0x0A,0x00,0x08,0x00,0x00,presetId,0x00,...,0x00]
+        /// </summary>
+        public static byte[] BuildNS2Sound(byte presetId = 0x04)
+        {
+            var cmd = new byte[16];
+            cmd[0] = 0x30;
+            cmd[1] = 0x01;
+            cmd[2] = 0x00;
+            cmd[3] = 0x0A;
+            cmd[4] = 0x00;
+            cmd[5] = 0x08;
+            cmd[6] = 0x00;
+            cmd[7] = 0x00;
+            cmd[8] = presetId;
+            return cmd;
+        }
+
+        /// <summary>
+        /// Build NS2 sound using joycon2cpp command IDs (CMD 0x0A, SUB 0x02).
+        /// </summary>
+        public static byte[] BuildNS2SoundCompat(byte presetId = 0x04)
+        {
+            var data = new byte[8];
+            data[0] = presetId;
+            return BuildNS2GenericCommand(0x0A, 0x02, data);
+        }
+
+        /// <summary>
+        /// Build NS2 set-input-mode using joycon2cpp-style generic framing.
+        /// </summary>
+        public static byte[] BuildNS2SetInputModeCompat(byte mode = 0x3F)
+            => BuildNS2GenericCommand(0x03, 0x00, new byte[] { mode });
+
+        /// <summary>
         /// Build an NS2 set-input-report-mode command.
         /// <paramref name="mode"/> 0x3F = simple HID (continuous full-rate reports),
         /// 0x30 = standard full mode (default firmware mode, change-triggered).
