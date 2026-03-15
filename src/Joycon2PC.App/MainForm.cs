@@ -60,6 +60,14 @@ namespace Joycon2PC.App
             public override string ToString() => Label;
         }
 
+        private sealed class ConnectModeOption
+        {
+            public required string Label { get; init; }
+            public required ConnectMode Value { get; init; }
+
+            public override string ToString() => Label;
+        }
+
         // ── theme colours ──────────────────────────────────────────────────
         private static readonly Color BG            = Color.FromArgb(20,  20,  20);
         private static readonly Color PANEL         = Color.FromArgb(32,  32,  32);
@@ -105,6 +113,7 @@ namespace Joycon2PC.App
         private Button _btnTestRumble   = null!;
         private CheckBox _chkConnectSound = null!;
         private CheckBox _chkMouseMode = null!;
+        private ComboBox _cmbConnectMode = null!;
         private ComboBox _cmbMouseStabilizer = null!;
         private ComboBox _cmbMouseSpeed = null!;
         private ComboBox _cmbLogMode = null!;
@@ -149,8 +158,16 @@ namespace Joycon2PC.App
             VeryStable,
         }
 
+        private enum ConnectMode
+        {
+            AutoPair,
+            SingleLeft,
+            SingleRight,
+        }
+
         private MouseSpeedMode _mouseSpeedMode = MouseSpeedMode.Normal;
         private MouseStabilizerMode _mouseStabilizerMode = MouseStabilizerMode.Stable;
+        private ConnectMode _connectMode = ConnectMode.AutoPair;
         private const int CONNECT_FEEDBACK_PLAYER_NUM = 1;
 
         private JoyConVisualizerPanel _joyconViz = null!;
@@ -377,25 +394,40 @@ namespace Joycon2PC.App
             var lblModuleTitle = MakeLabel("Single-Player Controls", 10, new Point(10, 8), bold: true, color: ACCENT);
             modulePanel.Controls.Add(lblModuleTitle);
 
-            modulePanel.Controls.Add(MakeLabel("Device", 8, new Point(12, 40), color: TXT_DIM));
+            modulePanel.Controls.Add(MakeLabel("Mode", 8, new Point(12, 40), color: TXT_DIM));
+            _cmbConnectMode = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = FONT_SM,
+                BackColor = PANEL_ALT,
+                ForeColor = TXT,
+                Bounds = new Rectangle(48, 36, 164, 24),
+            };
+            _cmbConnectMode.SelectedIndexChanged += (sender, args) =>
+            {
+                _connectMode = (_cmbConnectMode.SelectedItem as ConnectModeOption)?.Value ?? ConnectMode.AutoPair;
+            };
+            modulePanel.Controls.Add(_cmbConnectMode);
+
+            modulePanel.Controls.Add(MakeLabel("Device", 8, new Point(224, 40), color: TXT_DIM));
             _cmbDeviceTarget = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(58, 36, 176, 24),
+                Bounds = new Rectangle(270, 36, 178, 24),
             };
             modulePanel.Controls.Add(_cmbDeviceTarget);
 
-            modulePanel.Controls.Add(MakeLabel("Sound", 8, new Point(248, 40), color: TXT_DIM));
+            modulePanel.Controls.Add(MakeLabel("Sound", 8, new Point(462, 40), color: TXT_DIM));
             _cmbSoundPreset = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(290, 36, 144, 24),
+                Bounds = new Rectangle(504, 36, 144, 24),
             };
             modulePanel.Controls.Add(_cmbSoundPreset);
 
@@ -406,7 +438,7 @@ namespace Joycon2PC.App
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font = FONT_SM,
-                Bounds = new Rectangle(438, 34, 68, 28),
+                Bounds = new Rectangle(652, 34, 68, 28),
                 Cursor = Cursors.Hand,
             };
             _btnTestSound.FlatAppearance.BorderSize = 1;
@@ -414,14 +446,14 @@ namespace Joycon2PC.App
             _btnTestSound.Click += async (sender, args) => await TriggerManualSoundTestAsync();
             modulePanel.Controls.Add(_btnTestSound);
 
-            modulePanel.Controls.Add(MakeLabel("LED", 8, new Point(518, 40), color: TXT_DIM));
+            modulePanel.Controls.Add(MakeLabel("LED", 8, new Point(730, 40), color: TXT_DIM));
             _cmbLedPattern = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(542, 36, 144, 24),
+                Bounds = new Rectangle(754, 36, 120, 24),
             };
             modulePanel.Controls.Add(_cmbLedPattern);
 
@@ -432,7 +464,7 @@ namespace Joycon2PC.App
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font = FONT_SM,
-                Bounds = new Rectangle(692, 34, 76, 28),
+                Bounds = new Rectangle(878, 34, 76, 28),
                 Cursor = Cursors.Hand,
             };
             _btnApplyLed.FlatAppearance.BorderSize = 1;
@@ -552,7 +584,7 @@ namespace Joycon2PC.App
             _btnTestRumble.FlatAppearance.BorderColor = BORDER;
             modulePanel.Controls.Add(_btnTestRumble);
 
-            var lblModuleHint = MakeLabel("Auto-connect sets the pair to P1 LED by default. Rumble via BLE not yet supported.", 8, new Point(352, 76), color: TXT_DIM);
+            var lblModuleHint = MakeLabel("Mode decides whether to expect a full pair or force a single Joy-Con as the active controller. Auto-connect sets P1 LED by default.", 8, new Point(352, 76), color: TXT_DIM);
             lblModuleHint.MaximumSize = new Size(600, 0);
             lblModuleHint.AutoSize = true;
             modulePanel.Controls.Add(lblModuleHint);
@@ -1057,14 +1089,24 @@ namespace Joycon2PC.App
 
                 Invoke(() =>
                 {
-                    bool dual = ids.Length >= 2;
+                    bool dual = _leftDeviceId != null && _rightDeviceId != null && _leftDeviceId != _rightDeviceId;
                     string lId = _leftDeviceId?[..Math.Min(8, _leftDeviceId.Length)] ?? "?";
                     string rId = _rightDeviceId?[..Math.Min(8, _rightDeviceId.Length)] ?? "?";
-                    string msg = dual
-                        ? $"Joy-Con pair connected! L={lId}  R={rId}"
-                        : $"Joy-Con 2 connected ({ids[0][..Math.Min(12, ids[0].Length)]})";
+                    string msg = _connectMode switch
+                    {
+                        ConnectMode.SingleLeft => $"Single Joy-Con mode active (Left). Device={lId}",
+                        ConnectMode.SingleRight => $"Single Joy-Con mode active (Right). Device={rId}",
+                        _ => dual
+                            ? $"Joy-Con pair connected! L={lId}  R={rId}"
+                            : $"Joy-Con 2 connected ({ids[0][..Math.Min(12, ids[0].Length)]})",
+                    };
                     Log(msg, GREEN);
-                    _lblJoyconStatus.Text      = dual ? "Joy-Con Pair Connected ✔" : "Connected ✔";
+                    _lblJoyconStatus.Text = _connectMode switch
+                    {
+                        ConnectMode.SingleLeft => "Single Joy-Con (L) Connected ✔",
+                        ConnectMode.SingleRight => "Single Joy-Con (R) Connected ✔",
+                        _ => dual ? "Joy-Con Pair Connected ✔" : "Connected ✔",
+                    };
                     _lblJoyconStatus.ForeColor = GREEN;
                     RefreshDeviceTargetOptions(scanner);
                 });
@@ -1150,6 +1192,12 @@ namespace Joycon2PC.App
         /// </summary>
         private void AssignDeviceIds(BLEScanner scanner, string[] ids)
         {
+            if (_connectMode != ConnectMode.AutoPair)
+            {
+                AssignSingleModeDeviceIds(scanner, ids);
+                return;
+            }
+
             // Pass 0: device name — most reliable (Windows names: "Joy-Con 2 (L)" / "Joy-Con 2 (R)")
             string? newLeft = null, newRight = null;
             foreach (var id in ids)
@@ -1220,6 +1268,38 @@ namespace Joycon2PC.App
 
             _leftDeviceId  = newLeft;
             _rightDeviceId = newRight;
+        }
+
+        private void AssignSingleModeDeviceIds(BLEScanner scanner, string[] ids)
+        {
+            string? leftCandidate = null;
+            string? rightCandidate = null;
+
+            foreach (var id in ids)
+            {
+                string name = scanner.GetDeviceName(id);
+                ushort pid = scanner.GetProductId(id);
+                bool isLeft = name.Contains("(L)", StringComparison.OrdinalIgnoreCase) || pid == BLEScanner.PID_JOYCON_L;
+                bool isRight = name.Contains("(R)", StringComparison.OrdinalIgnoreCase) || pid == BLEScanner.PID_JOYCON_R;
+
+                if (!isLeft && _deviceRStickSentinel.TryGetValue(id, out var rSentinel) && rSentinel)
+                    isLeft = true;
+                if (!isRight && _deviceLStickSentinel.TryGetValue(id, out var lSentinel) && lSentinel)
+                    isRight = true;
+
+                if (isLeft && leftCandidate == null)
+                    leftCandidate = id;
+                if (isRight && rightCandidate == null)
+                    rightCandidate = id;
+            }
+
+            string fallback = ids[0];
+            string chosen = _connectMode == ConnectMode.SingleLeft
+                ? (leftCandidate ?? fallback)
+                : (rightCandidate ?? fallback);
+
+            _leftDeviceId = chosen;
+            _rightDeviceId = chosen;
         }
 
         private readonly struct InputModeInitProfile
@@ -1803,6 +1883,15 @@ namespace Joycon2PC.App
 
         private void InitializeOptionControls()
         {
+            _cmbConnectMode.Items.Clear();
+            _cmbConnectMode.Items.AddRange(new object[]
+            {
+                new ConnectModeOption { Label = "Auto pair (L + R)", Value = ConnectMode.AutoPair },
+                new ConnectModeOption { Label = "Single Joy-Con (L)", Value = ConnectMode.SingleLeft },
+                new ConnectModeOption { Label = "Single Joy-Con (R)", Value = ConnectMode.SingleRight },
+            });
+            _cmbConnectMode.SelectedIndex = 0;
+
             _cmbDeviceTarget.Items.Clear();
             _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "Connected setup (pair/single)", DeviceId = null });
             _cmbDeviceTarget.SelectedIndex = 0;
