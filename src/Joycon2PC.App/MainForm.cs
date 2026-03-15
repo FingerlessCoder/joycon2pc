@@ -1087,6 +1087,21 @@ namespace Joycon2PC.App
                 // ── Assign L / R IDs from PnP (definitive, overrides early guess) ─
                 AssignDeviceIds(scanner, ids);
 
+                // In single mode, only proceed when the requested side is identified.
+                if (_connectMode != ConnectMode.AutoPair && (_leftDeviceId == null || _rightDeviceId == null))
+                {
+                    Invoke(() =>
+                    {
+                        string wanted = _connectMode == ConnectMode.SingleLeft ? "Left" : "Right";
+                        Log($"Single Joy-Con mode: target {wanted} side not identified yet. Retry after powering on only that side.", YELLOW);
+                        _lblJoyconStatus.Text = $"Waiting for {wanted} Joy-Con...";
+                        _lblJoyconStatus.ForeColor = YELLOW;
+                    });
+
+                    try { await Task.Delay(2_000, ct); } catch { break; }
+                    continue;
+                }
+
                 Invoke(() =>
                 {
                     bool dual = _leftDeviceId != null && _rightDeviceId != null && _leftDeviceId != _rightDeviceId;
@@ -1281,6 +1296,9 @@ namespace Joycon2PC.App
                 return;
             }
 
+            _leftDeviceId = null;
+            _rightDeviceId = null;
+
             string? leftCandidate = null;
             string? rightCandidate = null;
 
@@ -1302,10 +1320,37 @@ namespace Joycon2PC.App
                     rightCandidate = id;
             }
 
-            string fallback = ids[0];
-            string chosen = _connectMode == ConnectMode.SingleLeft
-                ? (leftCandidate ?? fallback)
-                : (rightCandidate ?? fallback);
+            string? chosen = _connectMode == ConnectMode.SingleLeft
+                ? leftCandidate
+                : rightCandidate;
+
+            if (chosen == null)
+            {
+                foreach (var id in ids)
+                {
+                    bool lSentinel = _deviceLStickSentinel.TryGetValue(id, out var ls) && ls;
+                    bool rSentinel = _deviceRStickSentinel.TryGetValue(id, out var rs) && rs;
+
+                    if (_connectMode == ConnectMode.SingleLeft && rSentinel && !lSentinel)
+                    {
+                        chosen = id;
+                        break;
+                    }
+
+                    if (_connectMode == ConnectMode.SingleRight && lSentinel && !rSentinel)
+                    {
+                        chosen = id;
+                        break;
+                    }
+                }
+            }
+
+            if (chosen == null)
+            {
+                // Deterministic single-mode: do not fall back to an arbitrary device.
+                // Caller will show retry guidance and keep scanning.
+                return;
+            }
 
             _leftDeviceId = chosen;
             _rightDeviceId = chosen;
