@@ -28,6 +28,17 @@ Connects both Joy-Con 2 (L) and (R), merges them into one virtual gamepad. No US
 4. Click **Start** — both controllers connect automatically
 5. Open a game and configure the virtual Xbox controller as normal
 
+### Mouse Mode (MVP)
+
+If you want desktop cursor control, enable **Mouse mode (MVP)** in Quick Controls.
+
+- Optical cursor movement from Joy-Con 2 R report bytes (not stick-as-mouse fallback)
+- Right Joy-Con lock in dual mode (prevents L/R cross-device conflicts)
+- `R` = left click, `ZR` = right click, `RStick` click = middle click (debounced)
+- Right stick Y-axis analog scroll wheel mapping
+- Speed presets and stabilizer presets (Raw / Stable / VStable)
+- Lightweight interpolation for sparse BLE report gaps to reduce visible cursor stutter
+
 ---
 
 ## What Works ✅
@@ -49,6 +60,24 @@ Connects both Joy-Con 2 (L) and (R), merges them into one virtual gamepad. No US
 - [x] Rumble / haptics forwarded from XInput → physical Joy-Con 2 (game rumble triggers controller vibration)
 - [x] Single Joy-Con mode — one Joy-Con alone maps its stick to the left-stick output automatically
 - [x] Dark Fluent UI with GDI+-drawn Joy-Con 2 silhouette visualizer (live button/stick state)
+- [x] Mouse mode (MVP): optical cursor, R/ZR click mapping, RS wheel scroll, stabilizer profiles
+
+---
+
+## Bluetooth Naming Compatibility (Some Laptops)
+
+On some Windows + Bluetooth driver combinations, paired Joy-Con 2 devices may show up with generic names like `Bluetooth LE ...` or `Device name` instead of `Joy-Con 2 (L)` / `Joy-Con 2 (R)`.
+
+This is usually a Windows Bluetooth cache/driver behavior, not a hardcoded device ID issue in this project.
+
+Recommended recovery steps:
+
+1. Remove all related entries in Windows Bluetooth settings (`Joy-Con`, `Bluetooth LE ...`, `Device name`).
+2. In Device Manager, uninstall stale Bluetooth/HID entries (including hidden devices), then reboot.
+3. Update Bluetooth driver and BIOS from OEM support page.
+4. Disable power-saving on the Bluetooth adapter in Device Manager.
+
+If naming is still generic, connection may still work, but side identification reliability can vary by driver stack.
 
 ---
 

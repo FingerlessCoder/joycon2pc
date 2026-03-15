@@ -31,8 +31,9 @@ namespace Joycon2PC.ViGEm
 
         // Output conditioning for smoother and more stable stick behavior.
         // Deadzone is applied in Xbox signed-short space (-32768..32767).
-        private const short AXIS_OUTPUT_DEADZONE = 2200;
-        private const float AXIS_SMOOTHING_ALPHA = 0.35f;
+        // 4500 ≈ 13.7 % of full range — covers typical NS2 stick drift/noise at rest.
+        private const short AXIS_OUTPUT_DEADZONE = 4500;
+        private const float AXIS_SMOOTHING_ALPHA = 0.22f;
 
         private bool _axisFilterInitialized = false;
         private short _filteredLeftX;
