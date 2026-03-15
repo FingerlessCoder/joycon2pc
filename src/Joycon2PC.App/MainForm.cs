@@ -169,6 +169,7 @@ namespace Joycon2PC.App
         private MouseStabilizerMode _mouseStabilizerMode = MouseStabilizerMode.Stable;
         private ConnectMode _connectMode = ConnectMode.AutoPair;
         private const int CONNECT_FEEDBACK_PLAYER_NUM = 1;
+        private bool _reconnectInProgress;
 
         private JoyConVisualizerPanel _joyconViz = null!;
 
@@ -406,6 +407,11 @@ namespace Joycon2PC.App
             _cmbConnectMode.SelectedIndexChanged += (sender, args) =>
             {
                 _connectMode = (_cmbConnectMode.SelectedItem as ConnectModeOption)?.Value ?? ConnectMode.AutoPair;
+                string modeLabel = (_cmbConnectMode.SelectedItem as ConnectModeOption)?.Label ?? "Auto pair (L + R)";
+                Log($"Connection mode: {modeLabel}", TXT_DIM);
+
+                if (_running)
+                    _ = PerformHardReconnectAsync("mode change");
             };
             modulePanel.Controls.Add(_cmbConnectMode);
 
@@ -688,39 +694,41 @@ namespace Joycon2PC.App
         // is unreliable and often never fires), then restart the scan loop immediately.
         private void OnReconnectClicked()
         {
-            Log("⟳ Reconnect pressed — clearing BLE state and restarting scan…", YELLOW);
-            _lblJoyconStatus.Text      = "Reconnecting…";
-            _lblJoyconStatus.ForeColor = YELLOW;
+            _ = PerformHardReconnectAsync("manual reconnect");
+        }
 
-            // Force-clear all stale device entries so GetKnownDeviceIds() returns 0
-            // and the wait loop in RunRealAsync exits immediately.
-            _scanner?.DisconnectAll();
-            _deviceStates.Clear();
-            _leftDeviceId  = null;
-            _rightDeviceId = null;
-            _deviceLStickSentinel.Clear();
-            _deviceRStickSentinel.Clear();
-
-            if (!_running)
-            {
-                StartAll();
+        private async Task PerformHardReconnectAsync(string reason)
+        {
+            if (_reconnectInProgress || IsDisposed)
                 return;
-            }
 
-            // Cancel current RunRealAsync iteration so the outer while-loop restarts
-            _cts?.Cancel();
-            _cts = new CancellationTokenSource();
-            _ = Task.Delay(400).ContinueWith(_ =>
+            _reconnectInProgress = true;
+            try
             {
+                Log($"⟳ Reconnect ({reason}) — fully restarting BLE loop…", YELLOW);
+                _lblJoyconStatus.Text = "Reconnecting…";
+                _lblJoyconStatus.ForeColor = YELLOW;
+
+                _scanner?.DisconnectAll();
+                _deviceStates.Clear();
+                _leftDeviceId = null;
+                _rightDeviceId = null;
+                _deviceLStickSentinel.Clear();
+                _deviceRStickSentinel.Clear();
+
+                bool wasRunning = _running;
+                if (wasRunning)
+                    StopAll();
+
+                await Task.Delay(260);
+
                 if (!IsDisposed)
-                    BeginInvoke(() =>
-                    {
-                        _running = true;
-#if INTHEHAND
-                        _ = RunRealAsync(_cts.Token);
-#endif
-                    });
-            });
+                    StartAll();
+            }
+            finally
+            {
+                _reconnectInProgress = false;
+            }
         }
 
         private void OnStartClicked(object? s, EventArgs e)
@@ -749,6 +757,8 @@ namespace Joycon2PC.App
 
 #if INTHEHAND
             Log("Searching for Joy-Con over Bluetooth LE...", ACCENT);
+            string modeLabel = (_cmbConnectMode?.SelectedItem as ConnectModeOption)?.Label ?? "Auto pair (L + R)";
+            DevLog($"Connection mode: {modeLabel}", TXT_DIM);
         var os = Environment.OSVersion.Version;
         bool isWin11OrNewer = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
         DevLog($"OS {os.Major}.{os.Minor}.{os.Build} ({(isWin11OrNewer ? "Win11+" : "Win10 compatibility mode")})", TXT_DIM);
