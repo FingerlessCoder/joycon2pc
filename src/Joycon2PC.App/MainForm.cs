@@ -170,6 +170,8 @@ namespace Joycon2PC.App
         private ConnectMode _connectMode = ConnectMode.AutoPair;
         private const int CONNECT_FEEDBACK_PLAYER_NUM = 1;
         private bool _reconnectInProgress;
+        private DateTime _lastReconnectRequestUtc = DateTime.MinValue;
+        private static readonly TimeSpan RECONNECT_MIN_INTERVAL = TimeSpan.FromMilliseconds(900);
 
         private JoyConVisualizerPanel _joyconViz = null!;
 
@@ -701,6 +703,14 @@ namespace Joycon2PC.App
         {
             if (_reconnectInProgress || IsDisposed)
                 return;
+
+            var now = DateTime.UtcNow;
+            if ((now - _lastReconnectRequestUtc) < RECONNECT_MIN_INTERVAL)
+            {
+                Log("Reconnect ignored: request too frequent.", TXT_DIM);
+                return;
+            }
+            _lastReconnectRequestUtc = now;
 
             _reconnectInProgress = true;
             try
