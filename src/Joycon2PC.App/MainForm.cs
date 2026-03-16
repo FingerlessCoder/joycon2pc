@@ -178,6 +178,7 @@ namespace Joycon2PC.App
         private const double DIAG_SPIKE_60_MS = 60;
         private const double DIAG_SPIKE_100_MS = 100;
         private readonly object _outputStateLock = new();
+        private readonly object _stateLock = new();
         private JoyconState _latestMergedState = new();
         private bool _latestMergedStateAvailable;
         private CancellationTokenSource? _outputPumpCts;
@@ -851,8 +852,12 @@ namespace Joycon2PC.App
             _lblConnectModeStatus.Text = $"Pair state: {state}";
             _lblConnectModeStatus.ForeColor = color ?? TXT_DIM;
 
+            bool isPairReady = state.Contains("Pair ready", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("Single ready", StringComparison.OrdinalIgnoreCase);
+            bool isFinalReady = state.Contains("Ready", StringComparison.OrdinalIgnoreCase) && !isPairReady;
+
             int stageValue;
-            if (state.Contains("Ready", StringComparison.OrdinalIgnoreCase))
+            if (isFinalReady)
                 stageValue = 3;
             else if (state.Contains("Init", StringComparison.OrdinalIgnoreCase) || state.Contains("Recycling", StringComparison.OrdinalIgnoreCase))
                 stageValue = 2;
@@ -877,7 +882,7 @@ namespace Joycon2PC.App
             Color activeColor = isError ? RED : isWarning ? YELLOW : ACCENT;
             ApplyConnectStageVisual(stageValue, activeColor);
 
-            if (stageValue >= 3)
+            if (isFinalReady)
                 _lastReadyUtc = DateTime.UtcNow;
 
             UpdateLinkHealthSummary();
@@ -1512,11 +1517,14 @@ namespace Joycon2PC.App
                 UpdateConnectModeStatusLabel("Recycling BLE session", YELLOW);
 
                 _scanner?.DisconnectAll();
-                _deviceStates.Clear();
-                _leftDeviceId = null;
-                _rightDeviceId = null;
-                _deviceLStickSentinel.Clear();
-                _deviceRStickSentinel.Clear();
+                lock (_stateLock)
+                {
+                    _deviceStates.Clear();
+                    _leftDeviceId = null;
+                    _rightDeviceId = null;
+                    _deviceLStickSentinel.Clear();
+                    _deviceRStickSentinel.Clear();
+                }
 
                 bool wasRunning = _running;
                 if (wasRunning)
@@ -1683,11 +1691,14 @@ namespace Joycon2PC.App
                 var deviceReportLock = new object();
                 var scanner = new BLEScanner();
                 _scanner = scanner;
-                _deviceStates.Clear();
-                _leftDeviceId = null;
-                _rightDeviceId = null;
-                _deviceLStickSentinel.Clear();
-                _deviceRStickSentinel.Clear();
+                lock (_stateLock)
+                {
+                    _deviceStates.Clear();
+                    _leftDeviceId = null;
+                    _rightDeviceId = null;
+                    _deviceLStickSentinel.Clear();
+                    _deviceRStickSentinel.Clear();
+                }
 
                 // â”€â”€ hex-dump and change-tracking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 var dumpCounts          = new Dictionary<string, int>();
@@ -1788,34 +1799,47 @@ namespace Joycon2PC.App
                         bool rxSentinel = decoded.RawRightStickX == NS2InputReportDecoder.SentinelStickValue
                                        && decoded.RawRightStickY == NS2InputReportDecoder.SentinelStickValue;
 
-                        // Persist raw sentinel flags so AssignDeviceIds Pass 3 can use them.
-                        // Use OR-assignment: once we've seen a sentinel it stays true.
-                        _deviceLStickSentinel[deviceId] = _deviceLStickSentinel.TryGetValue(deviceId, out var prevL) && prevL || lxSentinel;
-                        _deviceRStickSentinel[deviceId] = _deviceRStickSentinel.TryGetValue(deviceId, out var prevR) && prevR || rxSentinel;
-
-                        // Keep side assignment stable once both sides are known.
-                        // Without this lock, occasional glitch frames can flip L/R ownership
-                        // and cause visible LS/RS source jitter.
-                        bool sideMappingLocked = _leftDeviceId != null
-                            && _rightDeviceId != null
-                            && !string.Equals(_leftDeviceId, _rightDeviceId, StringComparison.OrdinalIgnoreCase);
-
-                        if (!sideMappingLocked)
+                        // Persist raw sentinel flags and side IDs under a shared lock.
+                        // Reconnect can clear these collections concurrently.
+                        string sideTag;
+                        string side2;
+                        lock (_stateLock)
                         {
-                            if (rxSentinel)
-                                _leftDeviceId = deviceId;   // R slot unused -> L Joy-Con
-                            else if (lxSentinel)
-                                _rightDeviceId = deviceId;  // L slot unused -> R Joy-Con
+                            _deviceLStickSentinel[deviceId] = _deviceLStickSentinel.TryGetValue(deviceId, out var prevL) && prevL || lxSentinel;
+                            _deviceRStickSentinel[deviceId] = _deviceRStickSentinel.TryGetValue(deviceId, out var prevR) && prevR || rxSentinel;
+
+                            // Keep side assignment stable once both sides are known.
+                            // Without this lock, occasional glitch frames can flip L/R ownership
+                            // and cause visible LS/RS source jitter.
+                            bool sideMappingLocked = _leftDeviceId != null
+                                && _rightDeviceId != null
+                                && !string.Equals(_leftDeviceId, _rightDeviceId, StringComparison.OrdinalIgnoreCase);
+
+                            if (!sideMappingLocked)
+                            {
+                                if (rxSentinel)
+                                    _leftDeviceId = deviceId;   // R slot unused -> L Joy-Con
+                                else if (lxSentinel)
+                                    _rightDeviceId = deviceId;  // L slot unused -> R Joy-Con
+                            }
+
+                            sideTag = deviceId == _leftDeviceId && deviceId == _rightDeviceId ? "S"
+                                : deviceId == _leftDeviceId ? "L"
+                                : deviceId == _rightDeviceId ? "R"
+                                : "?";
+
+                            side2 = deviceId == _leftDeviceId && deviceId == _rightDeviceId ? "S"
+                                : deviceId == _leftDeviceId ? "L"
+                                : deviceId == _rightDeviceId ? "R"
+                                : "?";
+
+                            _deviceStates[deviceId] = state;
                         }
 
                         // Log ONCE per device - exactly when dump count reaches 3
                         dumpCounts.TryGetValue(deviceId, out int dc);
                         if (dc == 3 && !stickLoggedDevices.Contains(deviceId)) // fire exactly once
                         {
-                            string sideTag = deviceId == _leftDeviceId && deviceId == _rightDeviceId ? "S"
-                                : deviceId == _leftDeviceId ? "L"
-                                : deviceId == _rightDeviceId ? "R"
-                                : "?";
                             int lxC = state.LeftStickX, lyC = state.LeftStickY;
                             int rxC = state.RightStickX, ryC = state.RightStickY;
                             try { BeginInvoke(() => DevLog(
@@ -1859,8 +1883,6 @@ namespace Joycon2PC.App
 
                         state.Buttons = stableButtons;
 
-                        _deviceStates[deviceId] = state;
-
                         ApplyMouseModeFromDevice(deviceId, data, state);
 
                         // â”€â”€ Debug: log only when buttons change or stick moves >80 counts â”€â”€
@@ -1885,10 +1907,6 @@ namespace Joycon2PC.App
                             try
                             {
                                 string sid   = deviceId.Length > 8 ? deviceId[..8] : deviceId;
-                                string side2 = deviceId == _leftDeviceId && deviceId == _rightDeviceId ? "S"
-                                             : deviceId == _leftDeviceId  ? "L"
-                                             : deviceId == _rightDeviceId ? "R" : "?";
-
                                 var btns = new System.Text.StringBuilder();
                                 void B(string n, SW2Button bit) { if (state.IsPressed(bit)) { if (btns.Length > 0) btns.Append(' '); btns.Append(n); } }
                                 B("Up",SW2Button.Up); B("Dn",SW2Button.Down);
@@ -2009,7 +2027,8 @@ namespace Joycon2PC.App
                     if (completed == scanReadySignal.Task)
                     {
                         scanTimeout.Cancel();
-                        await Task.Delay(120, ct);
+                        try { await scanTask; }
+                        catch (OperationCanceledException) { }
                     }
                     else
                     {
@@ -2185,15 +2204,17 @@ namespace Joycon2PC.App
         /// </summary>
         private void AssignDeviceIds(BLEScanner scanner, string[] ids)
         {
-            // Pass 0: device name â€” most reliable (Windows names: "Joy-Con 2 (L)" / "Joy-Con 2 (R)")
-            string? newLeft = null, newRight = null;
-            foreach (var id in ids)
+            lock (_stateLock)
             {
-                string n = scanner.GetDeviceName(id);
-                Console.WriteLine($"[Assign] id={id[..Math.Min(8,id.Length)]} name='{n}' pid=0x{scanner.GetProductId(id):X4}");
-                if (n.Contains("(L)", StringComparison.OrdinalIgnoreCase)) newLeft  = id;
-                else if (n.Contains("(R)", StringComparison.OrdinalIgnoreCase)) newRight = id;
-            }
+                // Pass 0: device name â€” most reliable (Windows names: "Joy-Con 2 (L)" / "Joy-Con 2 (R)")
+                string? newLeft = null, newRight = null;
+                foreach (var id in ids)
+                {
+                    string n = scanner.GetDeviceName(id);
+                    Console.WriteLine($"[Assign] id={id[..Math.Min(8,id.Length)]} name='{n}' pid=0x{scanner.GetProductId(id):X4}");
+                    if (n.Contains("(L)", StringComparison.OrdinalIgnoreCase)) newLeft  = id;
+                    else if (n.Contains("(R)", StringComparison.OrdinalIgnoreCase)) newRight = id;
+                }
 
             // Pass 1: PnP IDs (sometimes 0x0000 for NS2 over BLE, but try anyway)
             foreach (var id in ids)
@@ -2263,8 +2284,9 @@ namespace Joycon2PC.App
                     Console.WriteLine("[Assign] Both IDs unresolved; sentinel detection will complete assignment.");
 
             }
-            _leftDeviceId  = newLeft;
-            _rightDeviceId = newRight;
+                _leftDeviceId  = newLeft;
+                _rightDeviceId = newRight;
+            }
         }
 
         private readonly struct InputModeInitProfile
@@ -2474,14 +2496,16 @@ namespace Joycon2PC.App
         /// </summary>
         private JoyconState MergeDeviceStates()
         {
-            // Default sticks to centre so the visualiser and ViGEm start neutral
-            var merged = new JoyconState
+            lock (_stateLock)
             {
-                LeftStickX  = 1998, LeftStickY  = 1998,
-                RightStickX = 1998, RightStickY = 1998,
-            };
+                // Default sticks to centre so the visualiser and ViGEm start neutral
+                var merged = new JoyconState
+                {
+                    LeftStickX  = 1998, LeftStickY  = 1998,
+                    RightStickX = 1998, RightStickY = 1998,
+                };
 
-            if (_deviceStates.Count == 0) return merged;
+                if (_deviceStates.Count == 0) return merged;
 
             // â”€â”€ Dual / single device detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             bool isSingleDevice = _leftDeviceId != null
@@ -2603,7 +2627,8 @@ namespace Joycon2PC.App
                 }
             }
 
-            return merged;
+                return merged;
+            }
         }
 #endif
 
