@@ -39,6 +39,8 @@ namespace Joycon2PC.App.Bluetooth
     private readonly Dictionary<string, ushort> _deviceProductIds = new();
     // Device names per device id (e.g. "Joy-Con 2 (L)", "Joy-Con 2 (R)")
     private readonly Dictionary<string, string> _deviceNames = new();
+    // BluetoothDevice objects for proper GATT disconnect on session reset.
+    private readonly Dictionary<string, InTheHand.Bluetooth.BluetoothDevice> _bluetoothDevices = new();
 
     /// <summary>
     /// Outbound/internals diagnostic trace stream.
@@ -129,6 +131,7 @@ namespace Joycon2PC.App.Bluetooth
             _subManagers.Remove(deviceId);
             _deviceProductIds.Remove(deviceId);
             _deviceNames.Remove(deviceId);
+            _bluetoothDevices.Remove(deviceId);
             if (removed)
                 TraceInfo(deviceId, $"Removed writable device: {reason}");
             else
@@ -154,7 +157,11 @@ namespace Joycon2PC.App.Bluetooth
             {
                 string name = dev.Name ?? string.Empty;
                 Console.WriteLine($"[Paired] Name='{name}' Id={dev.Id} Paired={dev.IsPaired}");
-                if (IsNintendoDevice(name))
+                // Skip devices already connected on this scanner instance.
+                // Calling ConnectDeviceAsync again on an already-connected device
+                // would register duplicate CharacteristicValueChanged handlers,
+                // causing every input report to fire twice.
+                if (IsPotentialJoyconCandidate(name, dev.Id, dev.IsPaired) && !_writableCharacteristics.ContainsKey(dev.Id))
                     await ConnectDeviceAsync(dev, cancellationToken);
             }
 
@@ -174,7 +181,7 @@ namespace Joycon2PC.App.Bluetooth
             {
                 string name = dev.Name ?? string.Empty;
                 Console.WriteLine($"[Scan] Name='{name}' Id={dev.Id} Paired={dev.IsPaired}");
-                if (IsNintendoDevice(name) && !_writableCharacteristics.ContainsKey(dev.Id))
+                if (IsPotentialJoyconCandidate(name, dev.Id, dev.IsPaired) && !_writableCharacteristics.ContainsKey(dev.Id))
                     await ConnectDeviceAsync(dev, cancellationToken);
             }
         }
@@ -195,10 +202,33 @@ namespace Joycon2PC.App.Bluetooth
             name.Contains("Nintendo",      StringComparison.OrdinalIgnoreCase) ||
             name.Contains("Pro Controller",StringComparison.OrdinalIgnoreCase));
 
+    private static bool IsPotentialJoyconCandidate(string name, string deviceId, bool isPaired)
+    {
+        if (IsNintendoDevice(name))
+            return true;
+
+        // Some Windows setups expose bonded Joy-Con 2 controllers with generic
+        // names like "DeviceName" even though the underlying BLE device is valid.
+        // In that case, allow paired BTHLE devices to be probed by service UUID.
+        if (!isPaired)
+            return false;
+
+        bool genericName = string.IsNullOrWhiteSpace(name)
+            || string.Equals(name, "DeviceName", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Bluetooth LE Device", StringComparison.OrdinalIgnoreCase);
+
+        if (!genericName)
+            return false;
+
+        return deviceId.Contains("BTHLE", StringComparison.OrdinalIgnoreCase)
+            || deviceId.Contains("Dev_", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task ConnectDeviceAsync(InTheHand.Bluetooth.BluetoothDevice dev, CancellationToken cancellationToken)
     {
         string name = dev.Name ?? string.Empty;
         _deviceNames[dev.Id] = name;   // store immediately so GetDeviceName works
+        _bluetoothDevices[dev.Id] = dev; // store for proper GATT dispose on DisconnectAll
         Console.WriteLine($"  -> Connecting to '{name}' ({dev.Id})...");
 
         // Pair if not already paired
@@ -542,7 +572,16 @@ namespace Joycon2PC.App.Bluetooth
     {
         lock (_writableCharacteristics)
         {
-            Console.WriteLine($"DisconnectAll: clearing {_writableCharacteristics.Count} device(s)");
+            Console.WriteLine($"DisconnectAll: closing {_bluetoothDevices.Count} GATT client(s)");
+            foreach (var kvp in _bluetoothDevices)
+            {
+                try { (kvp.Value as IDisposable)?.Dispose(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"DisconnectAll: GATT dispose error [{ShortId(kvp.Key)}]: {ex.Message}");
+                }
+            }
+            _bluetoothDevices.Clear();
             _writableCharacteristics.Clear();
             _subscribedInputDevices.Clear();
             _subManagers.Clear();
