@@ -32,7 +32,8 @@ namespace Joycon2PC.ViGEm
         // Deadzone applied in Xbox signed-short space (-32768..32767).
         // 6000 ≈ 18.3 % of full range — covers NS2 drift at rest and factory off-centre offsets.
         // Remainder is rescaled so full deflection still reaches ±32767.
-        private const short AXIS_OUTPUT_DEADZONE = 6000;
+        public const short AxisOutputDeadzone = 6000;
+        private const short AXIS_OUTPUT_DEADZONE = AxisOutputDeadzone;
 
         /// <summary>
         /// Fired when the game/OS sends a rumble command to the virtual Xbox controller.

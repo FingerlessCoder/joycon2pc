@@ -74,6 +74,16 @@ namespace Joycon2PC.App.Bluetooth
     private static string Hex(byte[] data)
         => data == null || data.Length == 0 ? "<empty>" : BitConverter.ToString(data);
 
+    private bool IsAlreadyConnected(string deviceId)
+    {
+        lock (_writableCharacteristics)
+        {
+            return _subscribedInputDevices.Contains(deviceId)
+                || _bluetoothDevices.ContainsKey(deviceId)
+                || _writableCharacteristics.ContainsKey(deviceId);
+        }
+    }
+
     private void Trace(string level, string deviceId, string message)
     {
         string line = $"[{DateTime.Now:HH:mm:ss.fff}] [{ShortId(deviceId)}] [{level}] {message}";
@@ -161,7 +171,7 @@ namespace Joycon2PC.App.Bluetooth
                 // Calling ConnectDeviceAsync again on an already-connected device
                 // would register duplicate CharacteristicValueChanged handlers,
                 // causing every input report to fire twice.
-                if (IsPotentialJoyconCandidate(name, dev.Id, dev.IsPaired) && !_writableCharacteristics.ContainsKey(dev.Id))
+                if (IsPotentialJoyconCandidate(name, dev.Id, dev.IsPaired) && !IsAlreadyConnected(dev.Id))
                     await ConnectDeviceAsync(dev, cancellationToken);
             }
 
@@ -181,7 +191,7 @@ namespace Joycon2PC.App.Bluetooth
             {
                 string name = dev.Name ?? string.Empty;
                 Console.WriteLine($"[Scan] Name='{name}' Id={dev.Id} Paired={dev.IsPaired}");
-                if (IsPotentialJoyconCandidate(name, dev.Id, dev.IsPaired) && !_writableCharacteristics.ContainsKey(dev.Id))
+                if (IsPotentialJoyconCandidate(name, dev.Id, dev.IsPaired) && !IsAlreadyConnected(dev.Id))
                     await ConnectDeviceAsync(dev, cancellationToken);
             }
         }
@@ -227,8 +237,11 @@ namespace Joycon2PC.App.Bluetooth
     private async Task ConnectDeviceAsync(InTheHand.Bluetooth.BluetoothDevice dev, CancellationToken cancellationToken)
     {
         string name = dev.Name ?? string.Empty;
-        _deviceNames[dev.Id] = name;   // store immediately so GetDeviceName works
-        _bluetoothDevices[dev.Id] = dev; // store for proper GATT dispose on DisconnectAll
+        lock (_writableCharacteristics)
+        {
+            _deviceNames[dev.Id] = name;   // store immediately so GetDeviceName works
+            _bluetoothDevices[dev.Id] = dev; // store for proper GATT dispose on DisconnectAll
+        }
         Console.WriteLine($"  -> Connecting to '{name}' ({dev.Id})...");
 
         // Pair if not already paired

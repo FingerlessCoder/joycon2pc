@@ -52,7 +52,7 @@ namespace Joycon2PC.App
             public override string ToString() => Label;
         }
 
-        // â”€â”€ theme colours â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ------ theme colours ------------------------------------------------------------------------------------------------------------------------------------------------------
         private static readonly Color BG            = Color.FromArgb(20,  20,  20);
         private static readonly Color PANEL         = Color.FromArgb(32,  32,  32);
         private static readonly Color PANEL_ALT     = Color.FromArgb(26,  26,  26);
@@ -73,21 +73,21 @@ namespace Joycon2PC.App
         private static readonly Font  FONT_SM       = new("Segoe UI", 8f,  FontStyle.Regular);
         private static readonly Font  FONT_BOLD     = new("Segoe UI", 9f,  FontStyle.Bold);
 
-        // â”€â”€ runtime state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ------ runtime state ------------------------------------------------------------------------------------------------------------------------------------------------------
         private JoyconState _lastState = new();
         private bool _running   = false;
         private CancellationTokenSource? _cts;
 
         private Joycon2PC.ViGEm.ViGEmBridge? _bridge;
         private JoyconParser _parser = new();
-        private BLEScanner? _scanner;  // active scanner â€” used by Reconnect button
+        private BLEScanner? _scanner;  // active scanner - used by Reconnect button
         private bool _powerEventsSubscribed;
         private LogMode _logMode = LogMode.User;
         private readonly List<LogEntry> _logEntries = new();
         private const int MAX_LOG_ENTRIES = 500;
         private const int MAX_LOG_LINES = 300;
 
-        // â”€â”€ controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ------ controls ------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private Label  _lblVigemStatus  = null!;
         private Label  _lblJoyconStatus = null!;
         private Button _btnStart        = null!;
@@ -203,9 +203,9 @@ namespace Joycon2PC.App
             _powerEventsSubscribed = true;
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  UI CONSTRUCTION
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private void InitUI()
         {
             Text            = "Joycon2PC";
@@ -217,7 +217,7 @@ namespace Joycon2PC.App
             StartPosition   = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.Sizable;
 
-            // â”€â”€ title bar area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ title bar area ------------------------------------------------------------------------------------------------------------------------------------
             var lblTitle = MakeLabel("Joycon2PC", 21, new Point(18, 12), bold: true, color: ACCENT);
             lblTitle.AutoSize = true;
             Controls.Add(lblTitle);
@@ -226,7 +226,7 @@ namespace Joycon2PC.App
             lblSubtitle.AutoSize = true;
             Controls.Add(lblSubtitle);
 
-            // â”€â”€ status row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ status row ------------------------------------------------------------------------------------------------------------------------------------------------
             var statusPanel = new Panel
             {
                 BackColor = PANEL,
@@ -316,7 +316,7 @@ namespace Joycon2PC.App
             statusPanel.Resize += (sender, args) => LayoutStatusCards();
             LayoutStatusCards();
 
-            // â”€â”€ main content area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ main content area ---------------------------------------------------------------------------------------------------------------------------
             var contentGrid = new TableLayoutPanel
             {
                 Bounds = new Rectangle(14, statusPanel.Bottom + 12, 968, 336),
@@ -330,7 +330,7 @@ namespace Joycon2PC.App
             contentGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             Controls.Add(contentGrid);
 
-            // â”€â”€ Joy-Con 2 drawn visualizer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ Joy-Con 2 drawn visualizer ------------------------------------------------------------------------------------------------------
             _joyconViz = new JoyConVisualizerPanel
             {
                 BackColor   = PANEL,
@@ -339,7 +339,7 @@ namespace Joycon2PC.App
             };
             contentGrid.Controls.Add(_joyconViz, 0, 0);
 
-            // â”€â”€ log panel (right column) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ log panel (right column) ------------------------------------------------------------------------------------------------------
             var logCard = new Panel
             {
                 BackColor = PANEL,
@@ -452,7 +452,7 @@ namespace Joycon2PC.App
             };
             logCard.Controls.Add(_log);
 
-            // â”€â”€ action buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ action buttons ------------------------------------------------------------------------------------------------------------------------------------
             var actionPanel = new Panel
             {
                 Bounds = new Rectangle(14, 526, 968, 56),
@@ -822,9 +822,9 @@ namespace Joycon2PC.App
             _healthTimer.Start();
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  HELPER BUILDERS
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private static Label MakeLabel(string text, float size, Point loc, bool bold = false, Color? color = null)
             => new()
             {
@@ -859,6 +859,8 @@ namespace Joycon2PC.App
             int stageValue;
             if (isFinalReady)
                 stageValue = 3;
+            else if (isPairReady)
+                stageValue = 1;
             else if (state.Contains("Init", StringComparison.OrdinalIgnoreCase) || state.Contains("Recycling", StringComparison.OrdinalIgnoreCase))
                 stageValue = 2;
             else if (state.Contains("Scan", StringComparison.OrdinalIgnoreCase)
@@ -1452,9 +1454,9 @@ namespace Joycon2PC.App
             _btnIndicators[name].Tag = onColor ?? GREEN;
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  VIGEM CHECK
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private async Task CheckViGEmAsync()
         {
             await Task.Delay(200); // let window paint first
@@ -1483,9 +1485,9 @@ namespace Joycon2PC.App
             }
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  BUTTON HANDLERS
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         // Reconnect: force-clear stale BLE device state (Windows GattServerDisconnected
         // is unreliable and often never fires), then restart the scan loop immediately.
         private void OnReconnectClicked()
@@ -1573,7 +1575,7 @@ namespace Joycon2PC.App
             _btnStart.BackColor = BTN_STOP;
             UpdateLinkHealthSummary();
 
-            // Attach parser â†’ bridge
+            // Attach parser --- bridge
             _parser.StateChanged -= OnStateChanged;
             _parser               = new JoyconParser();
             _parser.StateChanged += OnStateChanged;
@@ -1668,9 +1670,9 @@ namespace Joycon2PC.App
             };
 
 #if INTHEHAND
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  REAL JOYCON LOOP  (dual Joy-Con merge + keep-alive + reconnect)
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
         // Per-device state tracking for dual Joy-Con merge
         private readonly Dictionary<string, JoyconState> _deviceStates = new();
@@ -1682,7 +1684,7 @@ namespace Joycon2PC.App
 
         private async Task RunRealAsync(CancellationToken ct)
         {
-            // â”€â”€ outer reconnect loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ outer reconnect loop ------------------------------------------------------------------------------------------------------------------
             while (!ct.IsCancellationRequested)
             {
                 DateTime lastReportUtc = DateTime.UtcNow;
@@ -1700,7 +1702,7 @@ namespace Joycon2PC.App
                     _deviceRStickSentinel.Clear();
                 }
 
-                // â”€â”€ hex-dump and change-tracking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                // ------ hex-dump and change-tracking ------------------------------------------------------------------------
                 var dumpCounts          = new Dictionary<string, int>();
                 var stickLoggedDevices  = new HashSet<string>();   // prevent dc==3 flood
                 var lastButtons         = new Dictionary<string, uint>();
@@ -1711,7 +1713,7 @@ namespace Joycon2PC.App
                 // Warmup gate: Joy-Con 2 controllers send a burst of garbage button data
                 // (L+ZL bits asserted) during their BLE init sequence (~200-400 ms).
                 // We suppress all button output for the first WARMUP_REPORTS reports per
-                // device. Stick data and sentinel detection are unaffected â€” they read
+                // device. Stick data and sentinel detection are unaffected --- they read
                 // from raw bytes, not from state.Buttons.
                 const int WARMUP_REPORTS = 30;
                 var warmupReports = new Dictionary<string, int>();
@@ -1760,7 +1762,7 @@ namespace Joycon2PC.App
                             try { BeginInvoke(() => DevLog($"RAW[{shortId}] len={data.Length}: {hex}", Color.FromArgb(255, 200, 80))); } catch { }
                         }
 
-                        // â”€â”€ Byte-diff logger: scan ALL bytes (skip [0]=rolling counter) â”€â”€
+                        // ------ Byte-diff logger: scan ALL bytes (skip [0]=rolling counter) ------
                         if (enableRawByteDiffLog)
                         {
                             if (lastRawBytes.TryGetValue(deviceId, out var prevRaw) && prevRaw.Length == data.Length)
@@ -1791,7 +1793,7 @@ namespace Joycon2PC.App
                             RightStickY = decoded.RightStickY,
                         };
 
-                        // Detect L vs R from sentinel (runs every report â€” unconditional).
+                        // Detect L vs R from sentinel (runs every report --- unconditional).
                         // Joy-Con L: its right-stick slot is always 2047 (unused).
                         // Joy-Con R: its left-stick slot is always 2047 (unused).
                         bool lxSentinel = decoded.RawLeftStickX == NS2InputReportDecoder.SentinelStickValue
@@ -1832,8 +1834,6 @@ namespace Joycon2PC.App
                                 : deviceId == _leftDeviceId ? "L"
                                 : deviceId == _rightDeviceId ? "R"
                                 : "?";
-
-                            _deviceStates[deviceId] = state;
                         }
 
                         // Log ONCE per device - exactly when dump count reaches 3
@@ -1848,7 +1848,7 @@ namespace Joycon2PC.App
                             stickLoggedDevices.Add(deviceId);  // never fire again for this device
                         }
 
-                        // â”€â”€ Warmup gate: suppress buttons until controller has settled â”€â”€
+                        // ------ Warmup gate: suppress buttons until controller has settled ------
                         warmupReports.TryGetValue(deviceId, out int wc);
                         warmupReports[deviceId] = wc + 1;
                         if (wc < WARMUP_REPORTS)
@@ -1883,10 +1883,24 @@ namespace Joycon2PC.App
 
                         state.Buttons = stableButtons;
 
+                        // Publish final per-device state only after all in-frame mutations complete.
+                        // JoyconState is mutable; publishing early can leak partially updated values.
+                        lock (_stateLock)
+                        {
+                            _deviceStates[deviceId] = new JoyconState
+                            {
+                                Buttons = state.Buttons,
+                                LeftStickX = state.LeftStickX,
+                                LeftStickY = state.LeftStickY,
+                                RightStickX = state.RightStickX,
+                                RightStickY = state.RightStickY,
+                            };
+                        }
+
                         ApplyMouseModeFromDevice(deviceId, data, state);
 
-                        // â”€â”€ Debug: log only when buttons change or stick moves >80 counts â”€â”€
-                        // (Never BeginInvoke on every report â€” that floods the UI thread queue)
+                        // ------ Debug: log only when buttons change or stick moves >80 counts ------
+                        // (Never BeginInvoke on every report --- that floods the UI thread queue)
                         if (enableVerboseInputLog && IsHandleCreated)
                         {
                         lastButtons.TryGetValue(deviceId, out uint prevBtn);
@@ -1941,7 +1955,7 @@ namespace Joycon2PC.App
                         }
                         }
 
-                        // â”€â”€ ViGEm â€” direct call, NOT via BeginInvoke â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        // ------ ViGEm --- direct call, NOT via BeginInvoke ---------------------------------
                         var merged = MergeDeviceStates();
                         lock (_outputStateLock)
                         {
@@ -1950,7 +1964,7 @@ namespace Joycon2PC.App
                         }
                         _lastState = merged;
 
-                        // â”€â”€ UI update â€” only when merged state actually changed â”€
+                        // ------ UI update --- only when merged state actually changed ---
                         if (IsHandleCreated)
                         {
                         bool mergedChanged = lastMerged == null
@@ -1976,7 +1990,7 @@ namespace Joycon2PC.App
                 using var scanTimeout = new CancellationTokenSource(30_000);
                 var scanReadySignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-                // â”€â”€ Immediate status update when a device connects â”€â”€â”€â”€â”€â”€â”€â”€
+                // ------ Immediate status update when a device connects ------------------------
                 // DeviceConnected fires during ScanAsync (not after), so the UI
                 // shows "Connected" the moment GATT subscription succeeds.
                 scanner.DeviceConnected += (deviceId, devName) =>
@@ -2009,7 +2023,7 @@ namespace Joycon2PC.App
                     catch { }
                 };
 
-                // â”€â”€ Scan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                // ------ Scan ---------------------------------------------------------------------------------------------------------------------------------------------------
                 Invoke(() =>
                 {
                     _lblJoyconStatus.Text      = "Scanning...";
@@ -2056,7 +2070,7 @@ namespace Joycon2PC.App
                     try { await Task.Delay(3_000, ct); } catch { break; }
                     continue;
                 }
-                // â”€â”€ Assign L / R IDs from PnP (definitive, overrides early guess) â”€
+                // ------ Assign L / R IDs from PnP (definitive, overrides early guess) ---
                 AssignDeviceIds(scanner, ids);
 
                 Invoke(() =>
@@ -2078,7 +2092,7 @@ namespace Joycon2PC.App
                 var sortedIds = SortDeviceIdsForPlayerOrder(scanner, ids);
                 DevLog("Connect flow: joycon2cpp-style init -> input mode -> LED -> sound", TXT_DIM);
 
-                // â”€â”€ Post-connect init: switch to continuous full-rate reporting â”€
+                // ------ Post-connect init: switch to continuous full-rate reporting ---
                 // Win10 typically needs a longer settle delay and more retries than Win11.
                 var inputModeInit = GetInputModeInitProfile();
                 try { await Task.Delay(inputModeInit.InitialDelayMs, ct); } catch { break; }
@@ -2090,7 +2104,7 @@ namespace Joycon2PC.App
                 await ApplyConnectFeedbackAsync(scanner, sortedIds, ct);
                 Invoke(() => UpdateConnectModeStatusLabel("Ready", GREEN));
 
-                // â”€â”€ Wait: stay here until all devices disconnect or user stops â”€
+                // ------ Wait: stay here until all devices disconnect or user stops ---
                 while (!ct.IsCancellationRequested)
                 {
                     try { await Task.Delay(250, ct); } catch { break; }
@@ -2206,7 +2220,7 @@ namespace Joycon2PC.App
         {
             lock (_stateLock)
             {
-                // Pass 0: device name â€” most reliable (Windows names: "Joy-Con 2 (L)" / "Joy-Con 2 (R)")
+                // Pass 0: device name --- most reliable (Windows names: "Joy-Con 2 (L)" / "Joy-Con 2 (R)")
                 string? newLeft = null, newRight = null;
                 foreach (var id in ids)
                 {
@@ -2245,9 +2259,9 @@ namespace Joycon2PC.App
                 {
                     bool lSentinel = _deviceLStickSentinel.TryGetValue(id, out var ls) && ls;
                     bool rSentinel = _deviceRStickSentinel.TryGetValue(id, out var rs) && rs;
-                    // R slot sentinel â†’ this is Joy-Con L
+                    // R slot sentinel --- this is Joy-Con L
                     if (rSentinel && !lSentinel && newLeft  == null) newLeft  = id;
-                    // L slot sentinel â†’ this is Joy-Con R
+                    // L slot sentinel --- this is Joy-Con R
                     if (lSentinel && !rSentinel && newRight == null) newRight = id;
                 }
             }
@@ -2487,9 +2501,9 @@ namespace Joycon2PC.App
         /// <summary>
         /// Merge states from all connected devices into one combined JoyconState.
         ///
-        /// Buttons  â€” OR'd from every device (each Joy-Con carries its own half of the buttons).
-        /// L Stick  â€” from the device identified as Joy-Con L (bytes [10..12] of its report).
-        /// R Stick  â€” from the device identified as Joy-Con R.
+        /// Buttons  --- OR'd from every device (each Joy-Con carries its own half of the buttons).
+        /// L Stick  --- from the device identified as Joy-Con L (bytes [10..12] of its report).
+        /// R Stick  --- from the device identified as Joy-Con R.
         ///             Joy-Con R sends its physical stick at the RIGHT-stick bytes [13..15];
         ///             if those are at centre (1998) we also try the left-stick bytes [10..12]
         ///             as a fallback in case the protocol puts it there on some firmware.
@@ -2507,14 +2521,14 @@ namespace Joycon2PC.App
 
                 if (_deviceStates.Count == 0) return merged;
 
-            // â”€â”€ Dual / single device detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ Dual / single device detection ------------------------------------------------------------------------------------
             bool isSingleDevice = _leftDeviceId != null
                                 && _leftDeviceId == _rightDeviceId;
             bool dualMode = !isSingleDevice
                           && _leftDeviceId != null
                           && _rightDeviceId != null;
 
-            // â”€â”€ Buttons â€” side-masked OR in dual mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ Buttons --- side-masked OR in dual mode ---------------------------------------------------------
             // L Joy-Con owns: ZL/L/D-pad/Minus/LStick/Capture/GripLeft/LSL/LSR
             // R Joy-Con owns: ZR/R/C/ABXY/Plus/Home/RStick/GripRight/RSL/RSR
             // Masking prevents start-up ghost presses on one side from contaminating
@@ -2545,14 +2559,14 @@ namespace Joycon2PC.App
             }
             else
             {
-                // Single controller or IDs not yet assigned â€” OR all buttons as-is.
+                // Single controller or IDs not yet assigned --- OR all buttons as-is.
                 foreach (var s in _deviceStates.Values)
                     merged.Buttons |= s.Buttons;
             }
 
             if (isSingleDevice)
             {
-                // Single controller â€” use whichever stick bytes are NOT at sentinel (1998).
+                // Single controller --- use whichever stick bytes are NOT at sentinel (1998).
                 // Joy-Con L: real data on LeftStick bytes [10..12], RightStick = 1998
                 // Joy-Con R: real data on RightStick bytes [13..15], LeftStick = 1998
                 if (_deviceStates.TryGetValue(_leftDeviceId!, out var s))
@@ -2562,13 +2576,13 @@ namespace Joycon2PC.App
 
                     if (rReal && !lReal)
                     {
-                        // Joy-Con R solo: physical stick â†’ LeftStick output (primary axis for games)
+                        // Joy-Con R solo: physical stick --- LeftStick output (primary axis for games)
                         merged.LeftStickX  = s.RightStickX;
                         merged.LeftStickY  = s.RightStickY;
                     }
                     else
                     {
-                        // Joy-Con L solo or unknown: physical stick â†’ LeftStick output
+                        // Joy-Con L solo or unknown: physical stick --- LeftStick output
                         merged.LeftStickX  = s.LeftStickX;
                         merged.LeftStickY  = s.LeftStickY;
                     }
@@ -2586,18 +2600,18 @@ namespace Joycon2PC.App
                 // Joy-Con R: its physical stick is at the RIGHT bytes [13..15].
                 // When active it reads ~1894-2100 (not exactly 1998).
                 // If still at 1998 (sentinel was neutralised in the report handler),
-                // the R controller hasn't sent a real value yet â€” leave merged at 1998.
+                // the R controller hasn't sent a real value yet --- leave merged at 1998.
                 if (_deviceStates.TryGetValue(_rightDeviceId!, out var rs))
                 {
                     // RightStick field is authoritative for Joy-Con R.
-                    // LeftStick field on the R device = 1998 (sentinel was neutralised) â€” ignore it.
+                    // LeftStick field on the R device = 1998 (sentinel was neutralised) --- ignore it.
                     merged.RightStickX = rs.RightStickX;
                     merged.RightStickY = rs.RightStickY;
                 }
             }
             else
             {
-                // IDs not yet fully assigned â€” output what we have but do NOT clobber IDs here.
+                // IDs not yet fully assigned --- output what we have but do NOT clobber IDs here.
                 // The report handler will assign the correct IDs when the sentinel is seen.
                 // Just pass through whatever data we have so the UI isn't frozen.
                 if (_leftDeviceId != null && _rightDeviceId == null && _deviceStates.TryGetValue(_leftDeviceId, out var onlyL))
@@ -2892,7 +2906,7 @@ namespace Joycon2PC.App
 
                 if (stickY != 0)
                 {
-                    // Up on stick (higher raw Y) â†’ positive wheel delta = scroll up in Windows.
+                    // Up on stick (higher raw Y) --- positive wheel delta = scroll up in Windows.
                     _mouseScrollAccumulator += stickY * MOUSE_SCROLL_GAIN;
 
                     int clicks = (int)Math.Truncate(_mouseScrollAccumulator);
@@ -3113,9 +3127,9 @@ namespace Joycon2PC.App
             }
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  PARSER CALLBACK  (called from background thread)
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private void OnStateChanged(JoyconState state)
         {
             // forward to ViGEm
@@ -3134,10 +3148,10 @@ namespace Joycon2PC.App
 
         private void UpdateInputDisplay(JoyconState state)
         {
-            // â”€â”€ Stick visualisers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ Stick visualisers ------------------------------------------------------------------------------------------------------------------------------
             _joyconViz?.SetSticks(state.LeftStickX, state.LeftStickY, state.RightStickX, state.RightStickY);
 
-            // â”€â”€ Button indicators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ Button indicators ------------------------------------------------------------------------------------------------------------------------------
             SetBtn("A",    state.IsPressed(SW2Button.A));
             SetBtn("B",    state.IsPressed(SW2Button.B));
             SetBtn("X",    state.IsPressed(SW2Button.X));
@@ -3164,9 +3178,9 @@ namespace Joycon2PC.App
 
         private void DrawStick(Panel panel, int rawX, int rawY)
         {
-            // NS2 12-bit raw â†’ normalised -1..1  (factory centre = 1998)
+            // NS2 12-bit raw --- normalised -1..1  (factory centre = 1998)
             const float ns2Centre = 1998f;
-            const float ns2Range  = 1251f;  // â‰ˆ half of 3249-746, used for symmetry
+            const float ns2Range  = 1251f;  // ~= half of 3249-746, used for symmetry
             float nx = Math.Clamp((rawX - ns2Centre) / ns2Range, -1f, 1f);
             float ny = Math.Clamp((rawY - ns2Centre) / ns2Range, -1f, 1f);
 
@@ -3196,9 +3210,9 @@ namespace Joycon2PC.App
             old?.Dispose();
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  LOGGING
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private void Log(string text, Color? color = null, LogAudience audience = LogAudience.User)
         {
             if (_log.InvokeRequired) { Invoke(() => Log(text, color, audience)); return; }
@@ -3275,9 +3289,9 @@ namespace Joycon2PC.App
             _log.SelectedText = string.Empty;
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  FORM CLOSE
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             _cts?.Cancel();
@@ -3296,9 +3310,9 @@ namespace Joycon2PC.App
             base.OnFormClosing(e);
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  JOY-CON 2 VISUALIZER  (custom-drawn GDI+ panel)
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private sealed class JoyConVisualizerPanel : Panel
         {
             private readonly Dictionary<string, bool> _p = new();
@@ -3354,10 +3368,11 @@ namespace Joycon2PC.App
             {
                 // Apply the same deadzone math as ViGEmBridge so the visualiser dot
                 // stays centred for any stick position that produces zero ViGEm output.
-                // DZ constant must match AXIS_OUTPUT_DEADZONE in ViGEmBridge.cs.
+                // Reuse shared constant to keep UI and output mapping in sync.
                 static float Apply(int raw) {
                     const float C = 1998f, R = 1251f;
-                    const float DZ = 6000f, MAX = 32767f, RANGE = MAX - DZ;
+                    const float DZ = Joycon2PC.ViGEm.ViGEmBridge.AxisOutputDeadzone;
+                    const float MAX = 32767f, RANGE = MAX - DZ;
                     float v = Math.Clamp((raw - C) / R, -1f, 1f);
                     float i16 = v * MAX;
                     float abs = Math.Abs(i16);
@@ -3386,8 +3401,8 @@ namespace Joycon2PC.App
                 DrawRJoyCon(g);
             }
 
-            // â”€â”€ L Joy-Con 2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-            //  Front face (topâ†’bottom): ZL/L triggers, âˆ’, L-Stick, LED, D-pad, Cap
+            // ------ L Joy-Con 2 ------------------------------------------------------------------------------------------------------------------------------------------------------
+            //  Front face (top---bottom): ZL/L triggers, ---, L-Stick, LED, D-pad, Cap
             private void DrawLJoyCon(Graphics g)
             {
                 const int bx = 8, by = 44, bw = 174, bh = 294;
@@ -3406,7 +3421,7 @@ namespace Joycon2PC.App
                 // Body outline
                 DrawRR(g, new Pen(Color.FromArgb(68, 68, 76), 1.5f), bx, by, bw, bh, 26);
 
-                // âˆ’ button (top-right of face)
+                // --- button (top-right of face)
                 CircBtn(g, 150, 75, 10, "-", On("-"));
 
                 // Left Stick (upper-center of face)
@@ -3428,11 +3443,11 @@ namespace Joycon2PC.App
                 g.FillRectangle(new SolidBrush(C_CROSS), dpx - 9, dpy - 9, 18, 18);
 
                 // Screenshot / Capture button
-                SqBtn(g, 130, 258, 20, 20, "#", On("Cap"), Ac("Cap"));
+                SqBtn(g, 130, 258, 20, 20, "[]", On("Cap"), Ac("Cap"));
             }
 
-            // â”€â”€ R Joy-Con 2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-            //  Front face (topâ†’bottom): ZR/R triggers, +, ABXY+Home (upper), R-Stick, C
+            // ------ R Joy-Con 2 ------------------------------------------------------------------------------------------------------------------------------------------------------
+            //  Front face (top---bottom): ZR/R triggers, +, ABXY+Home (upper), R-Stick, C
             private void DrawRJoyCon(Graphics g)
             {
                 const int bx = 252, by = 44, bw = 174, bh = 294;
@@ -3475,7 +3490,7 @@ namespace Joycon2PC.App
                 CircBtn(g, 315, 286, 12, "C", On("C"));
             }
 
-            // â”€â”€ drawing primitives â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ------ drawing primitives ------------------------------------------------------------------------------------------------------------------------------
             private void StickViz(Graphics g, int cx, int cy, int r,
                                   float nx, float ny, Color rim, bool pressed)
             {
