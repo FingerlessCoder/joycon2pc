@@ -86,7 +86,7 @@ If naming is still generic, connection may still work, but side identification r
 ### 🔴 High priority
 - [ ] **BLE connection latency & jitter** — measure P95 connect time, report interval std dev, and stick idle noise across all scenarios; fix bottlenecks (tracked: #12)
 - [ ] **Reduce build size** — current self-contained EXE is ~190 MB (full .NET 9 runtime bundled); switch to framework-dependent publish → ~28 MB with no code changes needed; self-contained cannot be trimmed (WinForms limitation)
-- [ ] **Auto-reconnect on sleep/resume** — Windows drops BLE on sleep; add `SystemEvents.PowerModeChanged` listener to trigger reconnect automatically
+- [x] **Auto-reconnect on sleep/resume** — `SystemEvents.PowerModeChanged` triggers BLE reconnect after resume
 - [ ] **Single Joy-Con sideways mode** — rotated button mapping when used alone (SL/SR → LB/RB, D-pad becomes face buttons for Joy-Con L sideways)
 - [ ] **SL / SR forwarding** — parsed but not sent to ViGEm; map to bumpers
 
@@ -140,8 +140,8 @@ If naming is still generic, connection may still work, but side identification r
 ### Software
 - [x] **Release binary** — published as GitHub Release (framework-dependent single-file EXE)
 - [ ] **Installer** — no installer/MSIX yet; manual extract-and-run only
-- [ ] **Single-device fallback** — if only one Joy-Con connects, the merged stick output may be incorrect (sentinel detection may assign both L and R to the same device)
-- [ ] **Auto-reconnect on sleep/resume** — Windows BLE stack drops connections on sleep; Reconnect button is a manual workaround
+- [x] **Single-device fallback** — a single Joy-Con now keeps its real side assignment and maps its physical stick safely to left-stick output
+- [x] **Auto-reconnect on sleep/resume** — Windows resume triggers an automatic BLE reconnect instead of requiring manual Reconnect
 - [ ] **System tray / background mode** — app window must stay open; no minimise-to-tray
 - [ ] **Virtual DS4 / DualSense output** — only Xbox 360 (XInput) output; no PlayStation controller emulation
 - [ ] **Per-game button remapping UI** — no built-in remapping; use Steam Input or reWASD for custom layouts
