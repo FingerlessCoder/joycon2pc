@@ -29,17 +29,11 @@ namespace Joycon2PC.ViGEm
         private const int NS2_CENTRE = 1998;
         private const int NS2_RANGE  = 3249 - 746;   // ≈ 2503 counts each side (asymmetric)
 
-        // Output conditioning for smoother and more stable stick behavior.
-        // Deadzone is applied in Xbox signed-short space (-32768..32767).
-        // 4500 ≈ 13.7 % of full range — covers typical NS2 stick drift/noise at rest.
-        private const short AXIS_OUTPUT_DEADZONE = 4500;
-        private const float AXIS_SMOOTHING_ALPHA = 0.22f;
-
-        private bool _axisFilterInitialized = false;
-        private short _filteredLeftX;
-        private short _filteredLeftY;
-        private short _filteredRightX;
-        private short _filteredRightY;
+        // Deadzone applied in Xbox signed-short space (-32768..32767).
+        // 6000 ≈ 18.3 % of full range — covers NS2 drift at rest and factory off-centre offsets.
+        // Remainder is rescaled so full deflection still reaches ±32767.
+        public const short AxisOutputDeadzone = 6000;
+        private const short AXIS_OUTPUT_DEADZONE = AxisOutputDeadzone;
 
         /// <summary>
         /// Fired when the game/OS sends a rumble command to the virtual Xbox controller.
@@ -85,32 +79,13 @@ namespace Joycon2PC.ViGEm
                 var c = _controller;
 
                 // ── Axes ─────────────────────────────────────────────────────────────
-                // 12-bit NS2 stick (0..4095, factory centre ≈ 1998) → signed short (-32768..32767)
-                short rawLx = MapStick(state.LeftStickX);
-                short rawLy = MapStick(state.LeftStickY);
-                short rawRx = MapStick(state.RightStickX);
-                short rawRy = MapStick(state.RightStickY);
-
-                if (!_axisFilterInitialized)
-                {
-                    _filteredLeftX = ApplyDeadzone(rawLx);
-                    _filteredLeftY = ApplyDeadzone(rawLy);
-                    _filteredRightX = ApplyDeadzone(rawRx);
-                    _filteredRightY = ApplyDeadzone(rawRy);
-                    _axisFilterInitialized = true;
-                }
-                else
-                {
-                    _filteredLeftX = FilterAxis(_filteredLeftX, rawLx);
-                    _filteredLeftY = FilterAxis(_filteredLeftY, rawLy);
-                    _filteredRightX = FilterAxis(_filteredRightX, rawRx);
-                    _filteredRightY = FilterAxis(_filteredRightY, rawRy);
-                }
-
-                c.SetAxisValue(Xbox360Axis.LeftThumbX, _filteredLeftX);
-                c.SetAxisValue(Xbox360Axis.LeftThumbY, _filteredLeftY);
-                c.SetAxisValue(Xbox360Axis.RightThumbX, _filteredRightX);
-                c.SetAxisValue(Xbox360Axis.RightThumbY, _filteredRightY);
+                // Map 12-bit NS2 stick → signed short → deadzone. No smoothing filter:
+                // exponential smoothing had a rounding-trap near zero (previous=2, target=0
+                // → Math.Round(-0.44)=0 → output stuck at 2 forever) which caused RS jitter.
+                c.SetAxisValue(Xbox360Axis.LeftThumbX,  ApplyDeadzone(MapStick(state.LeftStickX)));
+                c.SetAxisValue(Xbox360Axis.LeftThumbY,  ApplyDeadzone(MapStick(state.LeftStickY)));
+                c.SetAxisValue(Xbox360Axis.RightThumbX, ApplyDeadzone(MapStick(state.RightStickX)));
+                c.SetAxisValue(Xbox360Axis.RightThumbY, ApplyDeadzone(MapStick(state.RightStickY)));
 
                 // ZL / ZR → analogue triggers (0 or 255)
                 c.SetSliderValue(Xbox360Slider.LeftTrigger,  state.IsPressed(SW2Button.ZL) ? (byte)255 : (byte)0);
@@ -190,13 +165,6 @@ namespace Joycon2PC.ViGEm
             return ClampToShort(sign * rescaled);
         }
 
-        private static short FilterAxis(short previous, short current)
-        {
-            short target = ApplyDeadzone(current);
-            int next = previous + (int)Math.Round((target - previous) * AXIS_SMOOTHING_ALPHA);
-            return ClampToShort(next);
-        }
-
         private static short ClampToShort(int value)
         {
             if (value > short.MaxValue) return short.MaxValue;
@@ -212,11 +180,6 @@ namespace Joycon2PC.ViGEm
                 (_controller as IDisposable)?.Dispose();
                 _client?.Dispose();
                 _connected = false;
-                _axisFilterInitialized = false;
-                _filteredLeftX = 0;
-                _filteredLeftY = 0;
-                _filteredRightX = 0;
-                _filteredRightY = 0;
             }
             catch { }
         }

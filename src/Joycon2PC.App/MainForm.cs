@@ -1,7 +1,9 @@
-
+﻿
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using System.Threading;
@@ -42,16 +44,6 @@ namespace Joycon2PC.App
             public override string ToString() => Label;
         }
 
-        private sealed class RumblePresetOption
-        {
-            public required string Label { get; init; }
-            public required byte LargeMotor { get; init; }
-            public required byte SmallMotor { get; init; }
-            public required int DurationMs { get; init; }
-
-            public override string ToString() => Label;
-        }
-
         private sealed class DeviceTargetOption
         {
             public required string Label { get; init; }
@@ -60,7 +52,7 @@ namespace Joycon2PC.App
             public override string ToString() => Label;
         }
 
-        // ── theme colours ──────────────────────────────────────────────────
+        // ------ theme colours ------------------------------------------------------------------------------------------------------------------------------------------------------
         private static readonly Color BG            = Color.FromArgb(20,  20,  20);
         private static readonly Color PANEL         = Color.FromArgb(32,  32,  32);
         private static readonly Color PANEL_ALT     = Color.FromArgb(26,  26,  26);
@@ -81,37 +73,45 @@ namespace Joycon2PC.App
         private static readonly Font  FONT_SM       = new("Segoe UI", 8f,  FontStyle.Regular);
         private static readonly Font  FONT_BOLD     = new("Segoe UI", 9f,  FontStyle.Bold);
 
-        // ── runtime state ──────────────────────────────────────────────────
+        // ------ runtime state ------------------------------------------------------------------------------------------------------------------------------------------------------
         private JoyconState _lastState = new();
         private bool _running   = false;
         private CancellationTokenSource? _cts;
 
         private Joycon2PC.ViGEm.ViGEmBridge? _bridge;
         private JoyconParser _parser = new();
-        private BLEScanner? _scanner;  // active scanner — used by Reconnect button
+        private BLEScanner? _scanner;  // active scanner - used by Reconnect button
         private bool _powerEventsSubscribed;
         private LogMode _logMode = LogMode.User;
         private readonly List<LogEntry> _logEntries = new();
         private const int MAX_LOG_ENTRIES = 500;
         private const int MAX_LOG_LINES = 300;
 
-        // ── controls ──────────────────────────────────────────────────────
+        // ------ controls ------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private Label  _lblVigemStatus  = null!;
         private Label  _lblJoyconStatus = null!;
         private Button _btnStart        = null!;
         private Button _btnReconnect    = null!;
         private Button _btnTestSound    = null!;
         private Button _btnApplyLed     = null!;
-        private Button _btnTestRumble   = null!;
         private CheckBox _chkConnectSound = null!;
         private CheckBox _chkMouseMode = null!;
+        private CheckBox _chkShowDevLogs = null!;
+        private Button _btnDiagCapture = null!;
+        private Button _btnExportLog = null!;
+        private Button _btnCopyLogSummary = null!;
+        private int _copySummaryFeedbackVersion;
+        private Label _lblLinkHealth = null!;
+        private Label _lblConnectModeStatus = null!;
+        private Label _lblStageScan = null!;
+        private Label _lblStageInit = null!;
+        private Label _lblStageReady = null!;
+        private ProgressBar _prgConnectStage = null!;
         private ComboBox _cmbMouseStabilizer = null!;
         private ComboBox _cmbMouseSpeed = null!;
-        private ComboBox _cmbLogMode = null!;
         private ComboBox _cmbDeviceTarget = null!;
         private ComboBox _cmbSoundPreset = null!;
         private ComboBox _cmbLedPattern = null!;
-        private ComboBox _cmbRumblePreset = null!;
         private RichTextBox _log        = null!;
 
         private bool _mouseModeEnabled;
@@ -151,6 +151,43 @@ namespace Joycon2PC.App
 
         private MouseSpeedMode _mouseSpeedMode = MouseSpeedMode.Normal;
         private MouseStabilizerMode _mouseStabilizerMode = MouseStabilizerMode.Stable;
+        private const int CONNECT_FEEDBACK_PLAYER_NUM = 1;
+        private bool _reconnectInProgress;
+        private DateTime _lastReconnectRequestUtc = DateTime.MinValue;
+        private DateTime _lastInputReportUtc = DateTime.MinValue;
+        private DateTime _lastReadyUtc = DateTime.MinValue;
+        private int _reconnectAttemptCount;
+        private System.Windows.Forms.Timer? _healthTimer;
+        private readonly object _diagLock = new();
+        private readonly Queue<double> _diagIntervalSamplesMs = new();
+        private readonly Queue<double> _diagProcessSamplesMs = new();
+        private readonly Dictionary<string, DeviceDiagnosticTracker> _diagByDevice = new();
+        private DiagnosticSnapshot? _lastCompletedDiagnosticSnapshot;
+        private DateTime _lastCompletedDiagCapturedLocal = DateTime.MinValue;
+        private DateTime _lastCompletedDiagCaptureStartUtc = DateTime.MinValue;
+        private long _diagTotalReports;
+        private long _diagDecodeFailures;
+        private long _diagInvalidSizeReports;
+        private long _diagLastArrivalTicks;
+        private bool _diagCaptureActive;
+        private DateTime _diagCaptureStartUtc = DateTime.MinValue;
+        private int _diagCaptureVersion;
+        private static readonly TimeSpan DIAG_CAPTURE_DURATION = TimeSpan.FromSeconds(30);
+        private const int DIAG_MAX_SAMPLES = 4096;
+        private const double DIAG_SPIKE_40_MS = 40;
+        private const double DIAG_SPIKE_60_MS = 60;
+        private const double DIAG_SPIKE_100_MS = 100;
+        private readonly object _outputStateLock = new();
+        private readonly object _stateLock = new();
+        private JoyconState _latestMergedState = new();
+        private bool _latestMergedStateAvailable;
+        private CancellationTokenSource? _outputPumpCts;
+        private Task? _outputPumpTask;
+        private const int OUTPUT_PUMP_HZ = 120;
+        private static readonly TimeSpan OUTPUT_PUMP_INTERVAL = TimeSpan.FromMilliseconds(1000.0 / OUTPUT_PUMP_HZ);
+        private static readonly TimeSpan RECONNECT_MIN_INTERVAL = TimeSpan.FromMilliseconds(900);
+        private static readonly TimeSpan RECONNECT_SETTLE_WIN10 = TimeSpan.FromMilliseconds(1200);
+        private static readonly TimeSpan RECONNECT_SETTLE_WIN11 = TimeSpan.FromMilliseconds(380);
 
         private JoyConVisualizerPanel _joyconViz = null!;
 
@@ -166,9 +203,9 @@ namespace Joycon2PC.App
             _powerEventsSubscribed = true;
         }
 
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  UI CONSTRUCTION
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private void InitUI()
         {
             Text            = "Joycon2PC";
@@ -180,20 +217,20 @@ namespace Joycon2PC.App
             StartPosition   = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.Sizable;
 
-            // ── title bar area ────────────────────────────────────────────
+            // ------ title bar area ------------------------------------------------------------------------------------------------------------------------------------
             var lblTitle = MakeLabel("Joycon2PC", 21, new Point(18, 12), bold: true, color: ACCENT);
             lblTitle.AutoSize = true;
             Controls.Add(lblTitle);
 
-            var lblSubtitle = MakeLabel("Joy-Con 2 to virtual Xbox controller bridge", 9, new Point(20, 46), color: TXT_DIM);
+            var lblSubtitle = MakeLabel("Joy-Con 2 to virtual Xbox controller bridge", 9, new Point(20, lblTitle.Bottom + 4), color: TXT_DIM);
             lblSubtitle.AutoSize = true;
             Controls.Add(lblSubtitle);
 
-            // ── status row ────────────────────────────────────────────────
+            // ------ status row ------------------------------------------------------------------------------------------------------------------------------------------------
             var statusPanel = new Panel
             {
                 BackColor = PANEL,
-                Bounds    = new Rectangle(14, 66, 968, 92),
+                Bounds    = new Rectangle(14, lblSubtitle.Bottom + 8, 968, 124),
                 Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 BorderStyle = BorderStyle.FixedSingle,
             };
@@ -212,8 +249,10 @@ namespace Joycon2PC.App
 
             leftStatusCard.Controls.Add(MakeLabel("ViGEm Driver", 9, new Point(10, 6), bold: true));
             _lblVigemStatus = MakeLabel("Not checked", 9, new Point(10, 25), color: YELLOW);
+            _lblVigemStatus.AutoSize = false;
+            _lblVigemStatus.AutoEllipsis = true;
+            _lblVigemStatus.Size = new Size(300, 18);
             leftStatusCard.Controls.Add(_lblVigemStatus);
-            leftStatusCard.Controls.Add(MakeLabel("Install ViGEmBus if unavailable", 8, new Point(168, 25), color: TXT_DIM));
 
             var rightStatusCard = new Panel
             {
@@ -226,8 +265,26 @@ namespace Joycon2PC.App
 
             rightStatusCard.Controls.Add(MakeLabel("Joy-Con Link", 9, new Point(10, 6), bold: true));
             _lblJoyconStatus = MakeLabel("Not connected", 9, new Point(10, 25), color: TXT_DIM);
+            _lblJoyconStatus.AutoSize = false;
+            _lblJoyconStatus.AutoEllipsis = true;
+            _lblJoyconStatus.Size = new Size(300, 18);
             rightStatusCard.Controls.Add(_lblJoyconStatus);
-            rightStatusCard.Controls.Add(MakeLabel("Pair in Windows Bluetooth settings", 8, new Point(168, 25), color: TXT_DIM));
+
+            var healthPanel = new Panel
+            {
+                BackColor = PANEL_ALT,
+                BorderStyle = BorderStyle.FixedSingle,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            };
+            statusPanel.Controls.Add(healthPanel);
+
+            healthPanel.Controls.Add(MakeLabel("Link Health", 8, new Point(10, 5), color: TXT_DIM));
+            _lblLinkHealth = MakeLabel("Waiting for first input report...", 8, new Point(86, 5), color: TXT_DIM);
+            _lblLinkHealth.AutoSize = false;
+            _lblLinkHealth.AutoEllipsis = true;
+            _lblLinkHealth.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _lblLinkHealth.Size = new Size(840, 16);
+            healthPanel.Controls.Add(_lblLinkHealth);
 
             void LayoutStatusCards()
             {
@@ -235,6 +292,8 @@ namespace Joycon2PC.App
                 const int gap = 12;
                 const int top = 30;
                 const int height = 50;
+                const int healthTop = 84;
+                const int healthHeight = 28;
 
                 int availableWidth = statusPanel.ClientSize.Width - (margin * 2) - gap;
                 if (availableWidth < 2 * 100)
@@ -246,70 +305,139 @@ namespace Joycon2PC.App
                 int cardWidth = availableWidth / 2;
                 leftStatusCard.Bounds = new Rectangle(margin, top, cardWidth, height);
                 rightStatusCard.Bounds = new Rectangle(margin + cardWidth + gap, top, cardWidth, height);
+                _lblVigemStatus.Width = Math.Max(120, cardWidth - 20);
+                _lblJoyconStatus.Width = Math.Max(120, cardWidth - 20);
+
+                int healthWidth = Math.Max(200, statusPanel.ClientSize.Width - (margin * 2));
+                healthPanel.Bounds = new Rectangle(margin, healthTop, healthWidth, healthHeight);
+                _lblLinkHealth.Width = Math.Max(100, healthPanel.ClientSize.Width - 96);
             }
 
             statusPanel.Resize += (sender, args) => LayoutStatusCards();
             LayoutStatusCards();
 
-            // ── main content area ─────────────────────────────────────────
+            // ------ main content area ---------------------------------------------------------------------------------------------------------------------------
             var contentGrid = new TableLayoutPanel
             {
-                Bounds = new Rectangle(14, 170, 968, 344),
+                Bounds = new Rectangle(14, statusPanel.Bottom + 12, 968, 336),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
                 BackColor = Color.Transparent,
                 ColumnCount = 2,
                 RowCount = 1,
             };
-            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 432f));
-            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44f));
+            contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56f));
             contentGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             Controls.Add(contentGrid);
 
-            // ── Joy-Con 2 drawn visualizer ──────────────────────────────────
+            // ------ Joy-Con 2 drawn visualizer ------------------------------------------------------------------------------------------------------
             _joyconViz = new JoyConVisualizerPanel
             {
                 BackColor   = PANEL,
                 Dock        = DockStyle.Fill,
-                MinimumSize = new Size(432, 332),
+                MinimumSize = new Size(360, 300),
             };
             contentGrid.Controls.Add(_joyconViz, 0, 0);
 
-            // ── log panel (right column) ──────────────────────────────────
+            // ------ log panel (right column) ------------------------------------------------------------------------------------------------------
             var logCard = new Panel
             {
                 BackColor = PANEL,
                 Dock = DockStyle.Fill,
                 BorderStyle = BorderStyle.FixedSingle,
                 Margin = new Padding(0),
-                Padding = new Padding(10, 34, 10, 10),
+                Padding = new Padding(10),
             };
             contentGrid.Controls.Add(logCard, 1, 0);
 
-            var logLabel = MakeLabel("Log", 10, new Point(10, 8), bold: true, color: ACCENT);
-            logLabel.AutoSize = true;
-            logCard.Controls.Add(logLabel);
-
-            var lblLogMode = MakeLabel("Mode", 8, new Point(388, 10), color: TXT_DIM);
-            lblLogMode.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            logCard.Controls.Add(lblLogMode);
-
-            _cmbLogMode = new ComboBox
+            var logHeader = new Panel
             {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = FONT_SM,
-                BackColor = PANEL_ALT,
-                ForeColor = TXT,
-                Bounds = new Rectangle(430, 6, 104, 24),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Dock = DockStyle.Top,
+                Height = 32,
+                BackColor = Color.Transparent,
             };
-            _cmbLogMode.Items.AddRange(new object[] { "User", "Developer" });
-            _cmbLogMode.SelectedIndex = 0;
-            _cmbLogMode.SelectedIndexChanged += (sender, args) =>
+            logCard.Controls.Add(logHeader);
+
+            var logLabel = MakeLabel("Log", 10, new Point(0, 4), bold: true, color: ACCENT);
+            logLabel.AutoSize = true;
+            logHeader.Controls.Add(logLabel);
+
+            _btnCopyLogSummary = new Button
             {
-                _logMode = _cmbLogMode.SelectedIndex <= 0 ? LogMode.User : LogMode.Developer;
+                Text = "Copy issues",
+                Font = FONT_SM,
+                BackColor = BTN_SECONDARY,
+                ForeColor = TXT,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(94, 24),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 3, 0, 0),
+            };
+            _btnCopyLogSummary.FlatAppearance.BorderSize = 1;
+            _btnCopyLogSummary.FlatAppearance.BorderColor = BORDER;
+            _btnCopyLogSummary.Click += async (sender, args) => await CopyRecentIssueSummaryToClipboardAsync();
+
+            _btnExportLog = new Button
+            {
+                Text = "Export log",
+                Font = FONT_SM,
+                BackColor = BTN_SECONDARY,
+                ForeColor = TXT,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(88, 24),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 3, 0, 0),
+            };
+            _btnExportLog.FlatAppearance.BorderSize = 1;
+            _btnExportLog.FlatAppearance.BorderColor = BORDER;
+            _btnExportLog.Click += (sender, args) => ExportLogToFile();
+
+            _btnDiagCapture = new Button
+            {
+                Text = "Diag 30s",
+                Font = FONT_SM,
+                BackColor = BTN_SECONDARY,
+                ForeColor = TXT,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(86, 24),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 3, 6, 0),
+            };
+            _btnDiagCapture.FlatAppearance.BorderSize = 1;
+            _btnDiagCapture.FlatAppearance.BorderColor = BORDER;
+            _btnDiagCapture.Click += async (sender, args) => await StartDiagnosticCaptureAsync();
+
+            _chkShowDevLogs = new CheckBox
+            {
+                Text = "Dev details",
+                Font = FONT_SM,
+                BackColor = Color.Transparent,
+                ForeColor = TXT,
+                AutoSize = true,
+                Margin = new Padding(0, 6, 8, 0),
+            };
+            _chkShowDevLogs.CheckedChanged += (sender, args) =>
+            {
+                _logMode = _chkShowDevLogs.Checked ? LogMode.Developer : LogMode.User;
                 RebuildLogView();
             };
-            logCard.Controls.Add(_cmbLogMode);
+
+            var logActions = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Right,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+            logActions.Controls.Add(_chkShowDevLogs);
+            logActions.Controls.Add(_btnDiagCapture);
+            logActions.Controls.Add(_btnExportLog);
+            logActions.Controls.Add(_btnCopyLogSummary);
+            logHeader.Controls.Add(logActions);
 
             _log = new RichTextBox
             {
@@ -324,7 +452,7 @@ namespace Joycon2PC.App
             };
             logCard.Controls.Add(_log);
 
-            // ── action buttons ────────────────────────────────────────────
+            // ------ action buttons ------------------------------------------------------------------------------------------------------------------------------------
             var actionPanel = new Panel
             {
                 Bounds = new Rectangle(14, 526, 968, 56),
@@ -335,18 +463,17 @@ namespace Joycon2PC.App
 
             _btnStart = new Button
             {
-                Text      = "Start Scan",
+                Text      = "Connect Joy-Cons",
                 BackColor = BTN_PRIMARY,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font      = new Font("Bahnschrift", 11f, FontStyle.Bold),
-                Bounds    = new Rectangle(0, 0, 250, 56),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Left,
+                Size      = new Size(280, 60),
+                Margin    = new Padding(0, 0, 10, 0),
                 Cursor    = Cursors.Hand,
             };
             _btnStart.FlatAppearance.BorderSize = 0;
             _btnStart.Click += OnStartClicked;
-            actionPanel.Controls.Add(_btnStart);
 
             _btnReconnect = new Button
             {
@@ -355,74 +482,154 @@ namespace Joycon2PC.App
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font      = FONT_MD,
-                Bounds    = new Rectangle(264, 0, 150, 56),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Left,
+                Size      = new Size(170, 60),
+                Margin    = new Padding(0, 0, 0, 0),
                 Cursor    = Cursors.Hand,
             };
             _btnReconnect.FlatAppearance.BorderSize = 1;
             _btnReconnect.FlatAppearance.BorderColor = BORDER;
             _btnReconnect.Click += (s, e) => OnReconnectClicked();
-            actionPanel.Controls.Add(_btnReconnect);
+
+            var actionFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Left,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+            actionFlow.Controls.Add(_btnStart);
+            actionFlow.Controls.Add(_btnReconnect);
+            actionPanel.Controls.Add(actionFlow);
 
             var modulePanel = new Panel
             {
                 BackColor = PANEL,
                 BorderStyle = BorderStyle.FixedSingle,
-                Bounds = new Rectangle(14, 594, 968, 112),
+                Bounds = new Rectangle(14, 586, 968, 120),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
             };
             Controls.Add(modulePanel);
 
-            var lblModuleTitle = MakeLabel("Quick Controls", 10, new Point(10, 8), bold: true, color: ACCENT);
+            void LayoutVerticalSections()
+            {
+                int margin = Math.Max(12, (int)Math.Round(12f * DeviceDpi / 96f));
+                int gap = margin;
+                int width = Math.Max(320, ClientSize.Width - margin * 2);
+                int actionHeight = Math.Max(60, (int)Math.Round(60f * DeviceDpi / 96f));
+                int moduleHeight = Math.Max(120, (int)Math.Round(120f * DeviceDpi / 96f));
+
+                int contentTop = statusPanel.Bottom + gap;
+                int reservedBottom = gap + actionHeight + gap + moduleHeight + gap;
+                int contentHeight = Math.Max(220, ClientSize.Height - contentTop - reservedBottom);
+
+                contentGrid.Bounds = new Rectangle(margin, contentTop, width, contentHeight);
+                actionPanel.Bounds = new Rectangle(margin, contentGrid.Bottom + gap, width, actionHeight);
+                modulePanel.Bounds = new Rectangle(margin, actionPanel.Bottom + gap, width, moduleHeight);
+            }
+
+            Resize += (sender, args) => LayoutVerticalSections();
+            LayoutVerticalSections();
+
+            var lblModuleTitle = MakeLabel("Controls", 10, new Point(10, 8), bold: true, color: ACCENT);
             modulePanel.Controls.Add(lblModuleTitle);
 
-            modulePanel.Controls.Add(MakeLabel("Target", 8, new Point(12, 40), color: TXT_DIM));
+            var controlsGrid = new TableLayoutPanel
+            {
+                Bounds = new Rectangle(10, 30, 946, 82),
+                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
+                BackColor = Color.Transparent,
+                ColumnCount = 3,
+                RowCount = 3,
+            };
+            controlsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32f));
+            controlsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34f));
+            controlsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34f));
+            controlsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
+            controlsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));
+            controlsGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            modulePanel.Controls.Add(controlsGrid);
+
+            var deviceFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                BackColor = Color.Transparent,
+            };
+            deviceFlow.Controls.Add(MakeLabel("Device", 8, new Point(0, 0), color: TXT_DIM));
             _cmbDeviceTarget = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(58, 36, 176, 24),
+                Width = 190,
+                Margin = new Padding(8, 4, 0, 0),
             };
-            modulePanel.Controls.Add(_cmbDeviceTarget);
+            deviceFlow.Controls.Add(_cmbDeviceTarget);
+            controlsGrid.Controls.Add(deviceFlow, 0, 0);
 
-            modulePanel.Controls.Add(MakeLabel("Sound", 8, new Point(248, 40), color: TXT_DIM));
+            var feedbackFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                BackColor = Color.Transparent,
+            };
+            feedbackFlow.Controls.Add(MakeLabel("Sound", 8, new Point(0, 0), color: TXT_DIM));
             _cmbSoundPreset = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(290, 36, 144, 24),
+                Width = 120,
+                Margin = new Padding(8, 4, 0, 0),
             };
-            modulePanel.Controls.Add(_cmbSoundPreset);
+            feedbackFlow.Controls.Add(_cmbSoundPreset);
 
             _btnTestSound = new Button
             {
-                Text = "▶ Sound",
+                Text = "Test Sound",
                 BackColor = BTN_SECONDARY,
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font = FONT_SM,
-                Bounds = new Rectangle(438, 34, 68, 28),
+                Size = new Size(84, 26),
+                Margin = new Padding(8, 3, 0, 0),
                 Cursor = Cursors.Hand,
             };
             _btnTestSound.FlatAppearance.BorderSize = 1;
             _btnTestSound.FlatAppearance.BorderColor = BORDER;
             _btnTestSound.Click += async (sender, args) => await TriggerManualSoundTestAsync();
-            modulePanel.Controls.Add(_btnTestSound);
+            feedbackFlow.Controls.Add(_btnTestSound);
+            controlsGrid.Controls.Add(feedbackFlow, 1, 0);
 
-            modulePanel.Controls.Add(MakeLabel("LED", 8, new Point(518, 40), color: TXT_DIM));
+            var rightFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                BackColor = Color.Transparent,
+            };
+
+            rightFlow.Controls.Add(MakeLabel("LED", 8, new Point(0, 0), color: TXT_DIM));
             _cmbLedPattern = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(542, 36, 144, 24),
+                Width = 102,
+                Margin = new Padding(8, 4, 0, 0),
             };
-            modulePanel.Controls.Add(_cmbLedPattern);
+            rightFlow.Controls.Add(_cmbLedPattern);
 
             _btnApplyLed = new Button
             {
@@ -431,35 +638,46 @@ namespace Joycon2PC.App
                 ForeColor = TXT,
                 FlatStyle = FlatStyle.Flat,
                 Font = FONT_SM,
-                Bounds = new Rectangle(692, 34, 76, 28),
+                Size = new Size(80, 26),
+                Margin = new Padding(8, 3, 0, 0),
                 Cursor = Cursors.Hand,
             };
             _btnApplyLed.FlatAppearance.BorderSize = 1;
             _btnApplyLed.FlatAppearance.BorderColor = BORDER;
             _btnApplyLed.Click += async (sender, args) => await TriggerManualLedApplyAsync();
-            modulePanel.Controls.Add(_btnApplyLed);
+            rightFlow.Controls.Add(_btnApplyLed);
 
             _chkConnectSound = new CheckBox
             {
-                Text = "Connect sound",
+                Text = "Auto sound",
                 Checked = true,
                 AutoSize = true,
                 ForeColor = TXT_DIM,
                 BackColor = Color.Transparent,
                 Font = FONT_SM,
-                Location = new Point(790, 10),
+                Margin = new Padding(10, 6, 0, 0),
             };
-            modulePanel.Controls.Add(_chkConnectSound);
+            rightFlow.Controls.Add(_chkConnectSound);
+            controlsGrid.Controls.Add(rightFlow, 2, 0);
+
+            var mouseFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                BackColor = Color.Transparent,
+            };
 
             _chkMouseMode = new CheckBox
             {
-                Text = "Mouse mode (MVP)",
+                Text = "Mouse mode",
                 Checked = false,
                 AutoSize = true,
                 ForeColor = TXT_DIM,
                 BackColor = Color.Transparent,
                 Font = FONT_SM,
-                Location = new Point(702, 10),
+                Margin = new Padding(0, 6, 0, 0),
             };
             _chkMouseMode.CheckedChanged += (sender, args) =>
             {
@@ -468,9 +686,9 @@ namespace Joycon2PC.App
                     _mouseModeEnabled = _chkMouseMode.Checked;
                     ResetMouseModeState(releasePressedButtons: true);
                 }
-                Log($"Mouse mode {( _mouseModeEnabled ? "enabled" : "disabled")}.", ACCENT);
+                Log($"Mouse mode {(_mouseModeEnabled ? "enabled" : "disabled") }.", ACCENT);
             };
-            modulePanel.Controls.Add(_chkMouseMode);
+            mouseFlow.Controls.Add(_chkMouseMode);
 
             _cmbMouseStabilizer = new ComboBox
             {
@@ -478,7 +696,8 @@ namespace Joycon2PC.App
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(472, 8, 112, 24),
+                Width = 116,
+                Margin = new Padding(10, 3, 0, 0),
             };
             _cmbMouseStabilizer.Items.AddRange(new object[] { "Stab: Raw", "Stab: Stable", "Stab: VStable" });
             _cmbMouseStabilizer.SelectedIndex = 1;
@@ -495,7 +714,7 @@ namespace Joycon2PC.App
                     ResetMouseModeState(releasePressedButtons: true);
                 }
             };
-            modulePanel.Controls.Add(_cmbMouseStabilizer);
+            mouseFlow.Controls.Add(_cmbMouseStabilizer);
 
             _cmbMouseSpeed = new ComboBox
             {
@@ -503,7 +722,8 @@ namespace Joycon2PC.App
                 Font = FONT_SM,
                 BackColor = PANEL_ALT,
                 ForeColor = TXT,
-                Bounds = new Rectangle(590, 8, 106, 24),
+                Width = 110,
+                Margin = new Padding(8, 3, 0, 0),
             };
             _cmbMouseSpeed.Items.AddRange(new object[] { "Mouse: Fast", "Mouse: Normal", "Mouse: Slow" });
             _cmbMouseSpeed.SelectedIndex = 1;
@@ -520,51 +740,91 @@ namespace Joycon2PC.App
                     ResetMouseModeState(releasePressedButtons: true);
                 }
             };
-            modulePanel.Controls.Add(_cmbMouseSpeed);
+            mouseFlow.Controls.Add(_cmbMouseSpeed);
+            controlsGrid.Controls.Add(mouseFlow, 0, 1);
 
-            _chkConnectSound.Location = new Point(816, 10);
+            _lblConnectModeStatus = MakeLabel("Pair state: Idle", 8, new Point(0, 0), color: TXT_DIM);
+            _lblConnectModeStatus.AutoSize = true;
+            _lblConnectModeStatus.Margin = new Padding(0, 3, 0, 0);
+            controlsGrid.Controls.Add(_lblConnectModeStatus, 1, 1);
+            controlsGrid.SetColumnSpan(_lblConnectModeStatus, 2);
 
-            // ── Rumble row (disabled — BLE rumble not yet supported) ─────
-            modulePanel.Controls.Add(MakeLabel("Rumble", 8, new Point(12, 76), color: TXT_DIM));
-            _cmbRumblePreset = new ComboBox
+            var stagePanel = new TableLayoutPanel
             {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = FONT_SM,
-                BackColor = PANEL_ALT,
-                ForeColor = TXT_DIM,
-                Bounds = new Rectangle(58, 72, 170, 24),
-                Enabled = false,
+                Dock = DockStyle.Fill,
+                BackColor = Color.Transparent,
+                ColumnCount = 4,
+                RowCount = 1,
+                Margin = new Padding(0, 0, 0, 0),
             };
-            modulePanel.Controls.Add(_cmbRumblePreset);
+            stagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            stagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            stagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            stagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
-            _btnTestRumble = new Button
+            _lblStageScan = new Label
             {
-                Text = "Rumble (N/A)",
-                BackColor = PANEL_ALT,
+                Text = "Scan",
+                AutoSize = true,
                 ForeColor = TXT_DIM,
-                FlatStyle = FlatStyle.Flat,
+                BackColor = PANEL_ALT,
                 Font = FONT_SM,
-                Bounds = new Rectangle(238, 70, 100, 28),
-                Enabled = false,
+                Padding = new Padding(8, 3, 8, 3),
+                Margin = new Padding(0, 1, 6, 0),
             };
-            _btnTestRumble.FlatAppearance.BorderSize = 1;
-            _btnTestRumble.FlatAppearance.BorderColor = BORDER;
-            modulePanel.Controls.Add(_btnTestRumble);
+            stagePanel.Controls.Add(_lblStageScan, 0, 0);
 
-            var lblModuleHint = MakeLabel("0x01=click  0x02=low-bat  0x03=reconnect  0x04=connect  | Rumble via BLE not yet supported", 8, new Point(352, 76), color: TXT_DIM);
-            lblModuleHint.MaximumSize = new Size(600, 0);
-            lblModuleHint.AutoSize = true;
-            modulePanel.Controls.Add(lblModuleHint);
+            _lblStageInit = new Label
+            {
+                Text = "Init",
+                AutoSize = true,
+                ForeColor = TXT_DIM,
+                BackColor = PANEL_ALT,
+                Font = FONT_SM,
+                Padding = new Padding(8, 3, 8, 3),
+                Margin = new Padding(0, 1, 6, 0),
+            };
+            stagePanel.Controls.Add(_lblStageInit, 1, 0);
+
+            _lblStageReady = new Label
+            {
+                Text = "Ready",
+                AutoSize = true,
+                ForeColor = TXT_DIM,
+                BackColor = PANEL_ALT,
+                Font = FONT_SM,
+                Padding = new Padding(8, 3, 8, 3),
+                Margin = new Padding(0, 1, 8, 0),
+            };
+            stagePanel.Controls.Add(_lblStageReady, 2, 0);
+
+            _prgConnectStage = new ProgressBar
+            {
+                Dock = DockStyle.Fill,
+                Style = ProgressBarStyle.Continuous,
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                Margin = new Padding(0, 3, 0, 0),
+            };
+            stagePanel.Controls.Add(_prgConnectStage, 3, 0);
+
+            controlsGrid.Controls.Add(stagePanel, 1, 2);
+            controlsGrid.SetColumnSpan(stagePanel, 2);
 
             InitializeOptionControls();
 
             // kick off ViGEm check
             _ = Task.Run(CheckViGEmAsync);
+
+            _healthTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _healthTimer.Tick += (sender, args) => UpdateLinkHealthSummary();
+            _healthTimer.Start();
         }
 
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  HELPER BUILDERS
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private static Label MakeLabel(string text, float size, Point loc, bool bold = false, Color? color = null)
             => new()
             {
@@ -583,6 +843,592 @@ namespace Joycon2PC.App
             BackColor = STICK_BG,
             BorderStyle = BorderStyle.FixedSingle,
         };
+
+        private void UpdateConnectModeStatusLabel(string state, Color? color = null)
+        {
+            if (_lblConnectModeStatus == null || _lblConnectModeStatus.IsDisposed)
+                return;
+
+            _lblConnectModeStatus.Text = $"Pair state: {state}";
+            _lblConnectModeStatus.ForeColor = color ?? TXT_DIM;
+
+            bool isPairReady = state.Contains("Pair ready", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("Single ready", StringComparison.OrdinalIgnoreCase);
+            bool isFinalReady = state.Contains("Ready", StringComparison.OrdinalIgnoreCase) && !isPairReady;
+
+            int stageValue;
+            if (isFinalReady)
+                stageValue = 3;
+            else if (isPairReady)
+                stageValue = 1;
+            else if (state.Contains("Init", StringComparison.OrdinalIgnoreCase) || state.Contains("Recycling", StringComparison.OrdinalIgnoreCase))
+                stageValue = 2;
+            else if (state.Contains("Scan", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("Pair", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("No controller", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("reconnecting", StringComparison.OrdinalIgnoreCase))
+                stageValue = 1;
+            else
+                stageValue = 0;
+
+            bool isWarning = state.Contains("reconnecting", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("retry", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("No controller", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("silent", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("Disconnected", StringComparison.OrdinalIgnoreCase);
+
+            bool isError = state.Contains("failed", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("error", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("not installed", StringComparison.OrdinalIgnoreCase);
+
+            Color activeColor = isError ? RED : isWarning ? YELLOW : ACCENT;
+            ApplyConnectStageVisual(stageValue, activeColor);
+
+            if (isFinalReady)
+                _lastReadyUtc = DateTime.UtcNow;
+
+            UpdateLinkHealthSummary();
+        }
+
+        private void ApplyConnectStageVisual(int stageValue, Color activeColor)
+        {
+            if (_prgConnectStage == null || _prgConnectStage.IsDisposed)
+                return;
+
+            stageValue = Math.Max(0, Math.Min(3, stageValue));
+            int progress = stageValue switch
+            {
+                0 => 0,
+                1 => 34,
+                2 => 68,
+                _ => 100,
+            };
+
+            _prgConnectStage.Value = progress;
+            SetStageCapsule(_lblStageScan, stageValue >= 1, activeColor);
+            SetStageCapsule(_lblStageInit, stageValue >= 2, activeColor);
+            SetStageCapsule(_lblStageReady, stageValue >= 3, activeColor);
+        }
+
+        private static void SetStageCapsule(Label label, bool active, Color activeColor)
+        {
+            if (label == null || label.IsDisposed)
+                return;
+
+            label.BackColor = active ? activeColor : PANEL_ALT;
+            label.ForeColor = active ? Color.White : TXT_DIM;
+        }
+
+        private void UpdateLinkHealthSummary()
+        {
+            if (_lblLinkHealth == null || _lblLinkHealth.IsDisposed)
+                return;
+
+            string reportText = _lastInputReportUtc == DateTime.MinValue
+                ? "n/a"
+                : $"{(DateTime.UtcNow - _lastInputReportUtc).TotalMilliseconds:0} ms ago";
+            string readyText = _lastReadyUtc == DateTime.MinValue
+                ? "n/a"
+                : $"{(DateTime.UtcNow - _lastReadyUtc).TotalSeconds:0}s";
+
+            var diag = SnapshotDiagnostics();
+            string diagText = diag.ReportCount < 8
+                ? "Diag: warming up"
+                : $"Diag p95={diag.IntervalP95Ms:0.0}ms p99={diag.IntervalP99Ms:0.0}ms jitter={diag.IntervalStdMs:0.0}ms proc95={diag.ProcessP95Ms:0.00}ms drop={diag.DecodeFailRatePercent:0.0}%";
+
+            if (diag.DeviceStats.Count > 0)
+            {
+                var sideParts = new List<string>();
+                foreach (var d in diag.DeviceStats)
+                    sideParts.Add(FormatDeviceDiagnosticSnapshot(d));
+                diagText = $"{diagText} | {string.Join(" ; ", sideParts)}";
+            }
+
+            _lblLinkHealth.Text = $"Last report: {reportText} | Last ready: {readyText} | Reconnects: {_reconnectAttemptCount} | {diagText}";
+
+            if (!_running)
+            {
+                _lblLinkHealth.ForeColor = TXT_DIM;
+                return;
+            }
+
+            if (_lastInputReportUtc == DateTime.MinValue)
+            {
+                _lblLinkHealth.ForeColor = YELLOW;
+                return;
+            }
+
+            var silence = DateTime.UtcNow - _lastInputReportUtc;
+            if (silence >= TimeSpan.FromSeconds(6))
+                _lblLinkHealth.ForeColor = RED;
+            else if (silence >= TimeSpan.FromSeconds(2))
+                _lblLinkHealth.ForeColor = YELLOW;
+            else
+                _lblLinkHealth.ForeColor = GREEN;
+        }
+
+        private void ExportLogToFile()
+        {
+            using var dialog = new System.Windows.Forms.SaveFileDialog
+            {
+                Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+                FileName = $"joycon2pc-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
+                Title = "Export Joycon2PC logs",
+            };
+
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                var lines = new List<string>
+                {
+                    $"Joycon2PC log export @ {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
+                    $"Pair status: {_lblConnectModeStatus.Text}",
+                    _lblLinkHealth != null ? $"Link health: {_lblLinkHealth.Text}" : string.Empty,
+                    string.Empty,
+                    "Diagnostics:",
+                };
+
+                lines.AddRange(BuildDiagnosticExportLines(preferFrozen: false));
+                lines.AddRange(new []
+                {
+                    string.Empty,
+                    "Entries:",
+                });
+
+                foreach (var entry in _logEntries)
+                {
+                    string audience = entry.Audience == LogAudience.Developer ? "DEV" : "USR";
+                    lines.Add($"[{entry.TimeText}] [{audience}] {entry.Message}");
+                }
+
+                File.WriteAllLines(dialog.FileName, lines);
+                Log($"Logs exported: {dialog.FileName}", GREEN);
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to export logs: {ex.Message}", YELLOW);
+            }
+        }
+
+        private async Task StartDiagnosticCaptureAsync()
+        {
+            if (_diagCaptureActive)
+            {
+                DevLog("Diagnostic capture is already running.", TXT_DIM);
+                return;
+            }
+
+            _diagCaptureActive = true;
+            _diagCaptureStartUtc = DateTime.UtcNow;
+            lock (_diagLock)
+            {
+                _lastCompletedDiagnosticSnapshot = null;
+                _lastCompletedDiagCapturedLocal = DateTime.MinValue;
+                _lastCompletedDiagCaptureStartUtc = DateTime.MinValue;
+            }
+            int version = Interlocked.Increment(ref _diagCaptureVersion);
+            ResetDiagnosticMetrics();
+            SetDiagCaptureButtonState(running: true);
+            Log($"Diagnostic capture started ({DIAG_CAPTURE_DURATION.TotalSeconds:0}s window).", ACCENT);
+
+            await Task.Delay(DIAG_CAPTURE_DURATION);
+
+            if (IsDisposed || version != _diagCaptureVersion)
+                return;
+
+            _diagCaptureActive = false;
+            SetDiagCaptureButtonState(running: false);
+
+            var diag = SnapshotDiagnostics();
+            lock (_diagLock)
+            {
+                _lastCompletedDiagnosticSnapshot = diag;
+                _lastCompletedDiagCapturedLocal = DateTime.Now;
+                _lastCompletedDiagCaptureStartUtc = _diagCaptureStartUtc;
+            }
+            Log($"Diagnostic capture complete: {FormatDiagnosticSnapshot(diag)}", GREEN);
+            DevLog("Tip: use Copy issues to copy diagnostics + recent logs.", TXT_DIM);
+        }
+
+        private void SetDiagCaptureButtonState(bool running)
+        {
+            if (_btnDiagCapture == null || _btnDiagCapture.IsDisposed)
+                return;
+
+            _btnDiagCapture.Enabled = !running;
+            _btnDiagCapture.Text = running ? "Diag running" : "Diag 30s";
+            _btnDiagCapture.BackColor = running ? ACCENT : BTN_SECONDARY;
+            _btnDiagCapture.ForeColor = running ? Color.White : TXT;
+        }
+
+        private sealed record DiagnosticSnapshot(
+            long ReportCount,
+            long DecodeFailCount,
+            long InvalidSizeCount,
+            double DecodeFailRatePercent,
+            double IntervalP50Ms,
+            double IntervalP95Ms,
+            double IntervalP99Ms,
+            double IntervalStdMs,
+            double ProcessP95Ms,
+            double ProcessP99Ms,
+            IReadOnlyList<DeviceDiagnosticSnapshot> DeviceStats
+        );
+
+        private sealed record DeviceDiagnosticSnapshot(
+            string DeviceId,
+            string Side,
+            long ReportCount,
+            long DecodeFailCount,
+            double DecodeFailRatePercent,
+            double IntervalP95Ms,
+            double IntervalP99Ms,
+            double IntervalStdMs,
+            int SpikeOver40Ms,
+            int SpikeOver60Ms,
+            int SpikeOver100Ms
+        );
+
+        private sealed class DeviceDiagnosticTracker
+        {
+            public readonly Queue<double> IntervalsMs = new();
+            public long LastArrivalTicks;
+            public long ReportCount;
+            public long DecodeFailCount;
+            public long InvalidSizeCount;
+            public int SpikeOver40Ms;
+            public int SpikeOver60Ms;
+            public int SpikeOver100Ms;
+        }
+
+        private void ResetDiagnosticMetrics()
+        {
+            lock (_diagLock)
+            {
+                _diagIntervalSamplesMs.Clear();
+                _diagProcessSamplesMs.Clear();
+                _diagTotalReports = 0;
+                _diagDecodeFailures = 0;
+                _diagInvalidSizeReports = 0;
+                _diagLastArrivalTicks = 0;
+                _diagByDevice.Clear();
+            }
+        }
+
+        private void RecordDiagnosticSample(string deviceId, long arrivalTicks, double processMs, bool decodeOk, bool sizeLooksValid)
+        {
+            lock (_diagLock)
+            {
+                _diagTotalReports++;
+                if (!decodeOk)
+                    _diagDecodeFailures++;
+                if (!sizeLooksValid)
+                    _diagInvalidSizeReports++;
+
+                if (_diagLastArrivalTicks != 0)
+                {
+                    double intervalMs = (arrivalTicks - _diagLastArrivalTicks) * 1000.0 / Stopwatch.Frequency;
+                    EnqueueBounded(_diagIntervalSamplesMs, intervalMs, DIAG_MAX_SAMPLES);
+                }
+
+                _diagLastArrivalTicks = arrivalTicks;
+                EnqueueBounded(_diagProcessSamplesMs, processMs, DIAG_MAX_SAMPLES);
+
+                if (!_diagByDevice.TryGetValue(deviceId, out var tracker))
+                {
+                    tracker = new DeviceDiagnosticTracker();
+                    _diagByDevice[deviceId] = tracker;
+                }
+
+                tracker.ReportCount++;
+                if (!decodeOk)
+                    tracker.DecodeFailCount++;
+                if (!sizeLooksValid)
+                    tracker.InvalidSizeCount++;
+
+                if (tracker.LastArrivalTicks != 0)
+                {
+                    double intervalMs = (arrivalTicks - tracker.LastArrivalTicks) * 1000.0 / Stopwatch.Frequency;
+                    EnqueueBounded(tracker.IntervalsMs, intervalMs, DIAG_MAX_SAMPLES);
+                    if (intervalMs >= DIAG_SPIKE_40_MS)
+                        tracker.SpikeOver40Ms++;
+                    if (intervalMs >= DIAG_SPIKE_60_MS)
+                        tracker.SpikeOver60Ms++;
+                    if (intervalMs >= DIAG_SPIKE_100_MS)
+                        tracker.SpikeOver100Ms++;
+                }
+
+                tracker.LastArrivalTicks = arrivalTicks;
+            }
+        }
+
+        private static void EnqueueBounded(Queue<double> queue, double value, int maxSamples)
+        {
+            queue.Enqueue(value);
+            while (queue.Count > maxSamples)
+                queue.Dequeue();
+        }
+
+        private DiagnosticSnapshot SnapshotDiagnostics()
+        {
+            lock (_diagLock)
+            {
+                return BuildDiagnosticSnapshotLocked();
+            }
+        }
+
+        private DiagnosticSnapshot BuildDiagnosticSnapshotLocked()
+        {
+            var intervalArray = _diagIntervalSamplesMs.ToArray();
+            var processArray = _diagProcessSamplesMs.ToArray();
+            double failRate = _diagTotalReports > 0
+                ? (_diagDecodeFailures * 100.0) / _diagTotalReports
+                : 0;
+
+            return new DiagnosticSnapshot(
+                ReportCount: _diagTotalReports,
+                DecodeFailCount: _diagDecodeFailures,
+                InvalidSizeCount: _diagInvalidSizeReports,
+                DecodeFailRatePercent: failRate,
+                IntervalP50Ms: Percentile(intervalArray, 50),
+                IntervalP95Ms: Percentile(intervalArray, 95),
+                IntervalP99Ms: Percentile(intervalArray, 99),
+                IntervalStdMs: StdDev(intervalArray),
+                ProcessP95Ms: Percentile(processArray, 95),
+                ProcessP99Ms: Percentile(processArray, 99),
+                DeviceStats: BuildDeviceDiagnosticSnapshotsLocked()
+            );
+        }
+
+        private (DiagnosticSnapshot Snapshot, DateTime CapturedLocal, DateTime CaptureStartUtc, bool IsFrozen) GetDiagnosticBundle(bool preferFrozen)
+        {
+            lock (_diagLock)
+            {
+                if (preferFrozen && _lastCompletedDiagnosticSnapshot != null)
+                {
+                    return (
+                        _lastCompletedDiagnosticSnapshot,
+                        _lastCompletedDiagCapturedLocal == DateTime.MinValue ? DateTime.Now : _lastCompletedDiagCapturedLocal,
+                        _lastCompletedDiagCaptureStartUtc,
+                        true);
+                }
+
+                return (BuildDiagnosticSnapshotLocked(), DateTime.Now, _diagCaptureStartUtc, false);
+            }
+        }
+
+        private List<DeviceDiagnosticSnapshot> BuildDeviceDiagnosticSnapshotsLocked()
+        {
+            var list = new List<DeviceDiagnosticSnapshot>(_diagByDevice.Count);
+            foreach (var pair in _diagByDevice)
+            {
+                string deviceId = pair.Key;
+                var tracker = pair.Value;
+                var intervals = tracker.IntervalsMs.ToArray();
+                double failRate = tracker.ReportCount > 0
+                    ? (tracker.DecodeFailCount * 100.0) / tracker.ReportCount
+                    : 0;
+
+                list.Add(new DeviceDiagnosticSnapshot(
+                    DeviceId: deviceId,
+                    Side: ResolveDeviceSide(deviceId),
+                    ReportCount: tracker.ReportCount,
+                    DecodeFailCount: tracker.DecodeFailCount,
+                    DecodeFailRatePercent: failRate,
+                    IntervalP95Ms: Percentile(intervals, 95),
+                    IntervalP99Ms: Percentile(intervals, 99),
+                    IntervalStdMs: StdDev(intervals),
+                    SpikeOver40Ms: tracker.SpikeOver40Ms,
+                    SpikeOver60Ms: tracker.SpikeOver60Ms,
+                    SpikeOver100Ms: tracker.SpikeOver100Ms
+                ));
+            }
+
+            list.Sort((a, b) => string.CompareOrdinal(a.Side, b.Side));
+            return list;
+        }
+
+        private string ResolveDeviceSide(string deviceId)
+        {
+            if (_leftDeviceId == deviceId && _rightDeviceId == deviceId)
+                return "S";
+            if (_leftDeviceId == deviceId)
+                return "L";
+            if (_rightDeviceId == deviceId)
+                return "R";
+            return "?";
+        }
+
+        private static double Percentile(double[] samples, int percentile)
+        {
+            if (samples.Length == 0)
+                return 0;
+
+            Array.Sort(samples);
+            double rank = (percentile / 100.0) * (samples.Length - 1);
+            int lowIndex = (int)Math.Floor(rank);
+            int highIndex = (int)Math.Ceiling(rank);
+            if (lowIndex == highIndex)
+                return samples[lowIndex];
+
+            double weight = rank - lowIndex;
+            return samples[lowIndex] + ((samples[highIndex] - samples[lowIndex]) * weight);
+        }
+
+        private static double StdDev(double[] samples)
+        {
+            if (samples.Length == 0)
+                return 0;
+
+            double mean = 0;
+            for (int i = 0; i < samples.Length; i++)
+                mean += samples[i];
+            mean /= samples.Length;
+
+            double variance = 0;
+            for (int i = 0; i < samples.Length; i++)
+            {
+                double delta = samples[i] - mean;
+                variance += delta * delta;
+            }
+
+            variance /= samples.Length;
+            return Math.Sqrt(variance);
+        }
+
+        private IEnumerable<string> BuildDiagnosticExportLines(bool preferFrozen)
+        {
+            var bundle = GetDiagnosticBundle(preferFrozen);
+            var diag = bundle.Snapshot;
+            yield return $"Captured at: {bundle.CapturedLocal:yyyy-MM-dd HH:mm:ss}";
+            if (bundle.CaptureStartUtc != DateTime.MinValue)
+                yield return $"Capture window start (UTC): {bundle.CaptureStartUtc:yyyy-MM-dd HH:mm:ss}";
+            if (bundle.IsFrozen)
+                yield return "Snapshot source: last completed 30s capture";
+            yield return $"Reports: {diag.ReportCount}";
+            yield return $"Decode failures: {diag.DecodeFailCount} ({diag.DecodeFailRatePercent:0.00}%)";
+            yield return $"Unexpected report length (!=63): {diag.InvalidSizeCount}";
+            yield return $"Report interval p50/p95/p99: {diag.IntervalP50Ms:0.00}/{diag.IntervalP95Ms:0.00}/{diag.IntervalP99Ms:0.00} ms";
+            yield return $"Report interval jitter(stddev): {diag.IntervalStdMs:0.00} ms";
+            yield return $"Pipeline process p95/p99: {diag.ProcessP95Ms:0.000}/{diag.ProcessP99Ms:0.000} ms";
+
+            if (diag.DeviceStats.Count > 0)
+            {
+                yield return "Per-device:";
+                foreach (var d in diag.DeviceStats)
+                {
+                    string shortId = d.DeviceId.Length > 8 ? d.DeviceId[..8] : d.DeviceId;
+                    yield return $"  [{d.Side}] {shortId}: reports={d.ReportCount}, fail={d.DecodeFailCount} ({d.DecodeFailRatePercent:0.00}%), p95/p99={d.IntervalP95Ms:0.00}/{d.IntervalP99Ms:0.00} ms, jitter={d.IntervalStdMs:0.00} ms, spikes40/60/100={d.SpikeOver40Ms}/{d.SpikeOver60Ms}/{d.SpikeOver100Ms}";
+                }
+            }
+        }
+
+        private IEnumerable<string> BuildDiagnosticSummaryLines()
+            => BuildDiagnosticExportLines(preferFrozen: true);
+
+        private static string FormatDiagnosticSnapshot(DiagnosticSnapshot diag)
+            => $"reports={diag.ReportCount}, fail={diag.DecodeFailCount}({diag.DecodeFailRatePercent:0.0}%), len!=63={diag.InvalidSizeCount}, interval p95/p99={diag.IntervalP95Ms:0.0}/{diag.IntervalP99Ms:0.0}ms, jitter={diag.IntervalStdMs:0.0}ms, proc p95={diag.ProcessP95Ms:0.00}ms";
+
+        private static string FormatDeviceDiagnosticSnapshot(DeviceDiagnosticSnapshot d)
+            => $"{d.Side} p95/p99={d.IntervalP95Ms:0.0}/{d.IntervalP99Ms:0.0}ms j={d.IntervalStdMs:0.0} spikes60={d.SpikeOver60Ms}";
+
+        private async Task CopyRecentIssueSummaryToClipboardAsync()
+        {
+            if (_logEntries.Count == 0)
+            {
+                Log("No logs available to summarize yet.", TXT_DIM);
+                await FlashCopySummaryButtonAsync("No logs", YELLOW, Color.Black, 900);
+                return;
+            }
+
+            bool IsIssueEntry(LogEntry e)
+            {
+                var msg = e.Message;
+                return msg.Contains("error", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("fail", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("retry", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("reconnect", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("silent", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("disconnected", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("not installed", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var selected = new List<LogEntry>();
+            for (int i = _logEntries.Count - 1; i >= 0 && selected.Count < 12; i--)
+            {
+                var entry = _logEntries[i];
+                if (IsIssueEntry(entry))
+                    selected.Add(entry);
+            }
+
+            if (selected.Count == 0)
+            {
+                for (int i = Math.Max(0, _logEntries.Count - 8); i < _logEntries.Count; i++)
+                    selected.Add(_logEntries[i]);
+            }
+
+            selected.Reverse();
+
+            var lines = new List<string>
+            {
+                $"Joycon2PC issue summary ({DateTime.Now:yyyy-MM-dd HH:mm:ss})",
+                $"Current pair state: {_lblConnectModeStatus.Text}",
+                "",
+                "Diagnostics:",
+            };
+
+            foreach (var line in BuildDiagnosticSummaryLines())
+                lines.Add(line);
+
+            lines.AddRange(new[]
+            {
+                string.Empty,
+                "Recent relevant logs:",
+            });
+
+            foreach (var entry in selected)
+                lines.Add($"[{entry.TimeText}] {entry.Message}");
+
+            string summary = string.Join(Environment.NewLine, lines);
+            try
+            {
+                Clipboard.SetText(summary);
+                Log("Issue summary copied to clipboard.", GREEN);
+                await FlashCopySummaryButtonAsync("Copied", GREEN, Color.White, 1100);
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to copy issue summary: {ex.Message}", YELLOW);
+                await FlashCopySummaryButtonAsync("Copy failed", RED, Color.White, 1400);
+            }
+        }
+
+        private async Task FlashCopySummaryButtonAsync(string text, Color backColor, Color foreColor, int durationMs)
+        {
+            if (_btnCopyLogSummary == null || _btnCopyLogSummary.IsDisposed)
+                return;
+
+            int version = Interlocked.Increment(ref _copySummaryFeedbackVersion);
+            string oldText = _btnCopyLogSummary.Text;
+            Color oldBack = _btnCopyLogSummary.BackColor;
+            Color oldFore = _btnCopyLogSummary.ForeColor;
+
+            _btnCopyLogSummary.Text = text;
+            _btnCopyLogSummary.BackColor = backColor;
+            _btnCopyLogSummary.ForeColor = foreColor;
+
+            await Task.Delay(Math.Max(150, durationMs));
+
+            if (_btnCopyLogSummary.IsDisposed || version != _copySummaryFeedbackVersion)
+                return;
+
+            _btnCopyLogSummary.Text = oldText;
+            _btnCopyLogSummary.BackColor = oldBack;
+            _btnCopyLogSummary.ForeColor = oldFore;
+        }
 
         private void AddButtonIndicator(Control parent, string name, Point loc, Color? onColor = null)
         {
@@ -608,9 +1454,9 @@ namespace Joycon2PC.App
             _btnIndicators[name].Tag = onColor ?? GREEN;
         }
 
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  VIGEM CHECK
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private async Task CheckViGEmAsync()
         {
             await Task.Delay(200); // let window paint first
@@ -619,18 +1465,9 @@ namespace Joycon2PC.App
                 _bridge = new Joycon2PC.ViGEm.ViGEmBridge();
                 _bridge.Connect();
 
-                // Forward XInput rumble commands back to physical Joy-Con 2 controllers.
-                // Games that use rumble will cause the Joy-Con 2 to vibrate.
-                _bridge.RumbleReceived += (large, small) =>
-                {
-                    var sc = _scanner;
-                    if (sc != null)
-                        _ = sc.SendRumbleAsync(large, small);
-                };
-
                     Invoke(() =>
                 {
-                    _lblVigemStatus.Text      = "✔  Driver found — virtual controller ready";
+                    _lblVigemStatus.Text      = "Driver found and ready";
                     _lblVigemStatus.ForeColor = GREEN;
                     Log("ViGEmBus driver found. Virtual Xbox 360 controller is ready.", GREEN);
                 });
@@ -639,7 +1476,7 @@ namespace Joycon2PC.App
             {
                     Invoke(() =>
                 {
-                    _lblVigemStatus.Text      = "✘  ViGEmBus driver NOT installed";
+                    _lblVigemStatus.Text      = "ViGEmBus not installed";
                     _lblVigemStatus.ForeColor = RED;
                     Log("ViGEmBus driver not found! Install it from:", RED);
                     Log("  https://github.com/nefarius/ViGEmBus/releases", ACCENT);
@@ -648,46 +1485,65 @@ namespace Joycon2PC.App
             }
         }
 
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  BUTTON HANDLERS
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         // Reconnect: force-clear stale BLE device state (Windows GattServerDisconnected
         // is unreliable and often never fires), then restart the scan loop immediately.
         private void OnReconnectClicked()
         {
-            Log("⟳ Reconnect pressed — clearing BLE state and restarting scan…", YELLOW);
-            _lblJoyconStatus.Text      = "Reconnecting…";
-            _lblJoyconStatus.ForeColor = YELLOW;
+            _ = PerformHardReconnectAsync("manual reconnect");
+        }
 
-            // Force-clear all stale device entries so GetKnownDeviceIds() returns 0
-            // and the wait loop in RunRealAsync exits immediately.
-            _scanner?.DisconnectAll();
-            _deviceStates.Clear();
-            _leftDeviceId  = null;
-            _rightDeviceId = null;
-            _deviceLStickSentinel.Clear();
-            _deviceRStickSentinel.Clear();
+        private async Task PerformHardReconnectAsync(string reason)
+        {
+            if (_reconnectInProgress || IsDisposed)
+                return;
 
-            if (!_running)
+            var now = DateTime.UtcNow;
+            if ((now - _lastReconnectRequestUtc) < RECONNECT_MIN_INTERVAL)
             {
-                StartAll();
+                Log("Reconnect ignored: request too frequent.", TXT_DIM);
                 return;
             }
+            _lastReconnectRequestUtc = now;
+            _reconnectAttemptCount++;
+            UpdateLinkHealthSummary();
 
-            // Cancel current RunRealAsync iteration so the outer while-loop restarts
-            _cts?.Cancel();
-            _cts = new CancellationTokenSource();
-            _ = Task.Delay(400).ContinueWith(_ =>
+            _reconnectInProgress = true;
+            try
             {
+                Log($"[reconnect] Reconnect ({reason}) - fully restarting BLE loop...", YELLOW);
+                _lblJoyconStatus.Text = "Reconnecting...";
+                _lblJoyconStatus.ForeColor = YELLOW;
+                UpdateConnectModeStatusLabel("Recycling BLE session", YELLOW);
+
+                _scanner?.DisconnectAll();
+                lock (_stateLock)
+                {
+                    _deviceStates.Clear();
+                    _leftDeviceId = null;
+                    _rightDeviceId = null;
+                    _deviceLStickSentinel.Clear();
+                    _deviceRStickSentinel.Clear();
+                }
+
+                bool wasRunning = _running;
+                if (wasRunning)
+                    StopAll();
+
+                var settleDelay = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)
+                    ? RECONNECT_SETTLE_WIN11
+                    : RECONNECT_SETTLE_WIN10;
+                await Task.Delay(settleDelay);
+
                 if (!IsDisposed)
-                    BeginInvoke(() =>
-                    {
-                        _running = true;
-#if INTHEHAND
-                        _ = RunRealAsync(_cts.Token);
-#endif
-                    });
-            });
+                    StartAll();
+            }
+            finally
+            {
+                _reconnectInProgress = false;
+            }
         }
 
         private void OnStartClicked(object? s, EventArgs e)
@@ -704,23 +1560,35 @@ namespace Joycon2PC.App
 
         private void StartAll()
         {
+            if (_running && _cts is { IsCancellationRequested: false })
+            {
+                DevLog("Start ignored: BLE loop already running.", TXT_DIM);
+                return;
+            }
+
             _running = true;
+            _lastInputReportUtc = DateTime.MinValue;
+            ResetDiagnosticMetrics();
+            StartOutputPump();
             _cts     = new CancellationTokenSource();
             _btnStart.Text      = "Stop";
             _btnStart.BackColor = BTN_STOP;
+            UpdateLinkHealthSummary();
 
-            // Attach parser → bridge
+            // Attach parser --- bridge
             _parser.StateChanged -= OnStateChanged;
             _parser               = new JoyconParser();
             _parser.StateChanged += OnStateChanged;
 
 #if INTHEHAND
             Log("Searching for Joy-Con over Bluetooth LE...", ACCENT);
+            DevLog("Connection mode: Auto pair (L + R)", TXT_DIM);
         var os = Environment.OSVersion.Version;
         bool isWin11OrNewer = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
         DevLog($"OS {os.Major}.{os.Minor}.{os.Build} ({(isWin11OrNewer ? "Win11+" : "Win10 compatibility mode")})", TXT_DIM);
             _lblJoyconStatus.Text      = "Scanning...";
             _lblJoyconStatus.ForeColor = YELLOW;
+                UpdateConnectModeStatusLabel("Scanning", YELLOW);
             _ = RunRealAsync(_cts.Token);
 #endif
         }
@@ -728,19 +1596,83 @@ namespace Joycon2PC.App
         private void StopAll()
         {
             _cts?.Cancel();
+            StopOutputPump();
+            if (_diagCaptureActive)
+            {
+                _diagCaptureActive = false;
+                Interlocked.Increment(ref _diagCaptureVersion);
+                SetDiagCaptureButtonState(running: false);
+                DevLog("Diagnostic capture cancelled: stopped by user.", TXT_DIM);
+            }
             _running = false;
-            _btnStart.Text      = "Start Scan";
+            _btnStart.Text      = "Connect Joy-Cons";
             _btnStart.BackColor = BTN_PRIMARY;
             _btnReconnect.BackColor = BTN_SECONDARY;
             _lblJoyconStatus.Text      = "Stopped";
             _lblJoyconStatus.ForeColor = TXT_DIM;
+            UpdateConnectModeStatusLabel("Stopped", TXT_DIM);
+            UpdateLinkHealthSummary();
             Log("Stopped.", TXT_DIM);
         }
 
+        private void StartOutputPump()
+        {
+            StopOutputPump();
+
+            _outputPumpCts = new CancellationTokenSource();
+            _outputPumpTask = Task.Run(() => OutputPumpLoopAsync(_outputPumpCts.Token));
+        }
+
+        private void StopOutputPump()
+        {
+            var cts = _outputPumpCts;
+            _outputPumpCts = null;
+            if (cts != null)
+            {
+                try { cts.Cancel(); } catch { }
+                cts.Dispose();
+            }
+
+            lock (_outputStateLock)
+            {
+                _latestMergedStateAvailable = false;
+            }
+        }
+
+        private async Task OutputPumpLoopAsync(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                JoyconState? state = null;
+                lock (_outputStateLock)
+                {
+                    if (_latestMergedStateAvailable)
+                        state = CloneState(_latestMergedState);
+                }
+
+                if (state != null)
+                {
+                    try { _bridge?.UpdateFromState(state); } catch { }
+                }
+
+                try { await Task.Delay(OUTPUT_PUMP_INTERVAL, ct); } catch { break; }
+            }
+        }
+
+        private static JoyconState CloneState(JoyconState source)
+            => new()
+            {
+                Buttons = source.Buttons,
+                LeftStickX = source.LeftStickX,
+                LeftStickY = source.LeftStickY,
+                RightStickX = source.RightStickX,
+                RightStickY = source.RightStickY,
+            };
+
 #if INTHEHAND
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  REAL JOYCON LOOP  (dual Joy-Con merge + keep-alive + reconnect)
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
         // Per-device state tracking for dual Joy-Con merge
         private readonly Dictionary<string, JoyconState> _deviceStates = new();
@@ -752,19 +1684,25 @@ namespace Joycon2PC.App
 
         private async Task RunRealAsync(CancellationToken ct)
         {
-            // ── outer reconnect loop ──────────────────────────────────────
+            // ------ outer reconnect loop ------------------------------------------------------------------------------------------------------------------
             while (!ct.IsCancellationRequested)
             {
                 DateTime lastReportUtc = DateTime.UtcNow;
+                DateTime lastInputModeRecoveryUtc = DateTime.MinValue;
+                var lastReportByDevice = new Dictionary<string, DateTime>();
+                var deviceReportLock = new object();
                 var scanner = new BLEScanner();
                 _scanner = scanner;
-                _deviceStates.Clear();
-                _leftDeviceId = null;
-                _rightDeviceId = null;
-                _deviceLStickSentinel.Clear();
-                _deviceRStickSentinel.Clear();
+                lock (_stateLock)
+                {
+                    _deviceStates.Clear();
+                    _leftDeviceId = null;
+                    _rightDeviceId = null;
+                    _deviceLStickSentinel.Clear();
+                    _deviceRStickSentinel.Clear();
+                }
 
-                // ── hex-dump and change-tracking ────────────────────────
+                // ------ hex-dump and change-tracking ------------------------------------------------------------------------
                 var dumpCounts          = new Dictionary<string, int>();
                 var stickLoggedDevices  = new HashSet<string>();   // prevent dc==3 flood
                 var lastButtons         = new Dictionary<string, uint>();
@@ -775,7 +1713,7 @@ namespace Joycon2PC.App
                 // Warmup gate: Joy-Con 2 controllers send a burst of garbage button data
                 // (L+ZL bits asserted) during their BLE init sequence (~200-400 ms).
                 // We suppress all button output for the first WARMUP_REPORTS reports per
-                // device. Stick data and sentinel detection are unaffected — they read
+                // device. Stick data and sentinel detection are unaffected --- they read
                 // from raw bytes, not from state.Buttons.
                 const int WARMUP_REPORTS = 30;
                 var warmupReports = new Dictionary<string, int>();
@@ -805,124 +1743,166 @@ namespace Joycon2PC.App
 
                 scanner.RawReportReceived += (deviceId, data) =>
                 {
+                    long diagArrivalTicks = Stopwatch.GetTimestamp();
+                    bool decodeOk = false;
+                    bool sizeLooksValid = data.Length == 63;
                     lastReportUtc = DateTime.UtcNow;
+                    _lastInputReportUtc = lastReportUtc;
+                    lock (deviceReportLock)
+                        lastReportByDevice[deviceId] = lastReportUtc;
                     string shortId = deviceId.Length > 8 ? deviceId[..8] : deviceId;
-
-                    // Hex dump first 3 reports per device
-                    if (!dumpCounts.ContainsKey(deviceId)) dumpCounts[deviceId] = 0;
-                    if (dumpCounts[deviceId] < 3)
+                    try
                     {
-                        dumpCounts[deviceId]++;
-                        string hex = BitConverter.ToString(data, 0, Math.Min(data.Length, 20));
-                        try { BeginInvoke(() => DevLog($"RAW[{shortId}] len={data.Length}: {hex}", Color.FromArgb(255, 200, 80))); } catch { }
-                    }
-
-                    // ── Byte-diff logger: scan ALL bytes (skip [0]=rolling counter) ──
-                    if (enableRawByteDiffLog)
-                    {
-                        if (lastRawBytes.TryGetValue(deviceId, out var prevRaw) && prevRaw.Length == data.Length)
+                        // Hex dump first 3 reports per device
+                        if (!dumpCounts.ContainsKey(deviceId)) dumpCounts[deviceId] = 0;
+                        if (dumpCounts[deviceId] < 3)
                         {
-                            var diff = new System.Text.StringBuilder();
-                            for (int i = 1; i < data.Length; i++)
-                            {
-                                if (data[i] != prevRaw[i])
-                                    diff.Append($" [{i}]:{prevRaw[i]:X2}→{data[i]:X2}");
-                            }
-                            if (diff.Length > 0)
-                                Console.WriteLine($"DIFF[{shortId}]{diff}");
+                            dumpCounts[deviceId]++;
+                            string hex = BitConverter.ToString(data, 0, Math.Min(data.Length, 20));
+                            try { BeginInvoke(() => DevLog($"RAW[{shortId}] len={data.Length}: {hex}", Color.FromArgb(255, 200, 80))); } catch { }
                         }
-                        lastRawBytes[deviceId] = (byte[])data.Clone();
-                    }
 
-                    if (!NS2InputReportDecoder.TryDecode(data, out var decoded))
-                        return;
+                        // ------ Byte-diff logger: scan ALL bytes (skip [0]=rolling counter) ------
+                        if (enableRawByteDiffLog)
+                        {
+                            if (lastRawBytes.TryGetValue(deviceId, out var prevRaw) && prevRaw.Length == data.Length)
+                            {
+                                var diff = new System.Text.StringBuilder();
+                                for (int i = 1; i < data.Length; i++)
+                                {
+                                    if (data[i] != prevRaw[i])
+                                        diff.Append($" [{i}]:{prevRaw[i]:X2}->{data[i]:X2}");
+                                }
+                                if (diff.Length > 0)
+                                    Console.WriteLine($"DIFF[{shortId}]{diff}");
+                            }
+                            lastRawBytes[deviceId] = (byte[])data.Clone();
+                        }
 
-                    var state = new JoyconState
-                    {
-                        Buttons = decoded.Buttons,
-                        LeftStickX = decoded.LeftStickX,
-                        LeftStickY = decoded.LeftStickY,
-                        RightStickX = decoded.RightStickX,
-                        RightStickY = decoded.RightStickY,
-                    };
+                        if (!NS2InputReportDecoder.TryDecode(data, out var decoded))
+                            return;
 
-                    // Detect L vs R from sentinel (runs every report — unconditional).
-                    // Joy-Con L: its right-stick slot is always 2047 (unused).
-                    // Joy-Con R: its left-stick slot is always 2047 (unused).
-                    bool lxSentinel = decoded.RawLeftStickX == NS2InputReportDecoder.SentinelStickValue
-                                   && decoded.RawLeftStickY == NS2InputReportDecoder.SentinelStickValue;
-                    bool rxSentinel = decoded.RawRightStickX == NS2InputReportDecoder.SentinelStickValue
-                                   && decoded.RawRightStickY == NS2InputReportDecoder.SentinelStickValue;
+                        decodeOk = true;
 
-                    // Persist raw sentinel flags so AssignDeviceIds Pass 3 can use them.
-                    // Use OR-assignment: once we've seen a sentinel it stays true.
-                    _deviceLStickSentinel[deviceId] = _deviceLStickSentinel.TryGetValue(deviceId, out var prevL) && prevL || lxSentinel;
-                    _deviceRStickSentinel[deviceId] = _deviceRStickSentinel.TryGetValue(deviceId, out var prevR) && prevR || rxSentinel;
+                        var state = new JoyconState
+                        {
+                            Buttons = decoded.Buttons,
+                            LeftStickX = decoded.LeftStickX,
+                            LeftStickY = decoded.LeftStickY,
+                            RightStickX = decoded.RightStickX,
+                            RightStickY = decoded.RightStickY,
+                        };
 
-                    if (rxSentinel)                 _leftDeviceId  = deviceId;  // R slot unused → L Joy-Con
-                    else if (lxSentinel)            _rightDeviceId = deviceId;  // L slot unused → R Joy-Con
-                    else
-                    {
-                        if (_leftDeviceId  == null) _leftDeviceId  = deviceId;
-                        if (_rightDeviceId == null) _rightDeviceId = deviceId;
-                    }
+                        // Detect L vs R from sentinel (runs every report --- unconditional).
+                        // Joy-Con L: its right-stick slot is always 2047 (unused).
+                        // Joy-Con R: its left-stick slot is always 2047 (unused).
+                        bool lxSentinel = decoded.RawLeftStickX == NS2InputReportDecoder.SentinelStickValue
+                                       && decoded.RawLeftStickY == NS2InputReportDecoder.SentinelStickValue;
+                        bool rxSentinel = decoded.RawRightStickX == NS2InputReportDecoder.SentinelStickValue
+                                       && decoded.RawRightStickY == NS2InputReportDecoder.SentinelStickValue;
 
-                    // Log ONCE per device — exactly when dump count reaches 3
-                    dumpCounts.TryGetValue(deviceId, out int dc);
-                    if (dc == 3 && !stickLoggedDevices.Contains(deviceId)) // fire exactly once
-                    {
-                        string sideTag = deviceId == _leftDeviceId ? "L" : deviceId == _rightDeviceId ? "R" : "?";
-                        int lxC = state.LeftStickX, lyC = state.LeftStickY;
-                        int rxC = state.RightStickX, ryC = state.RightStickY;
-                        try { BeginInvoke(() => DevLog(
-                            $"STICK[{shortId}]({sideTag}) LX={lxC} LY={lyC} RX={rxC} RY={ryC}",
-                            Color.FromArgb(100, 200, 255))); } catch { }
-                        stickLoggedDevices.Add(deviceId);  // never fire again for this device
-                    }
+                        // Persist raw sentinel flags and side IDs under a shared lock.
+                        // Reconnect can clear these collections concurrently.
+                        string sideTag;
+                        string side2;
+                        lock (_stateLock)
+                        {
+                            _deviceLStickSentinel[deviceId] = _deviceLStickSentinel.TryGetValue(deviceId, out var prevL) && prevL || lxSentinel;
+                            _deviceRStickSentinel[deviceId] = _deviceRStickSentinel.TryGetValue(deviceId, out var prevR) && prevR || rxSentinel;
 
-                    // ── Warmup gate: suppress buttons until controller has settled ──
-                    warmupReports.TryGetValue(deviceId, out int wc);
-                    warmupReports[deviceId] = wc + 1;
-                    if (wc < WARMUP_REPORTS)
-                        state.Buttons = 0;  // discard init-burst garbage
+                            // Keep side assignment stable once both sides are known.
+                            // Without this lock, occasional glitch frames can flip L/R ownership
+                            // and cause visible LS/RS source jitter.
+                            bool sideMappingLocked = _leftDeviceId != null
+                                && _rightDeviceId != null
+                                && !string.Equals(_leftDeviceId, _rightDeviceId, StringComparison.OrdinalIgnoreCase);
 
-                    // Per-device button debounce (word-level): accept a new state only
-                    // after BUTTON_DEBOUNCE_REPORTS consecutive identical reports to
-                    // reduce phantom press/release spikes. For a newly seen device
-                    // (or just after warmup), the debounced state starts at 0; a held
-                    // button therefore takes one additional report to be adopted.
-                    if (!buttonCandidate.TryGetValue(deviceId, out uint candidate) || candidate != state.Buttons)
-                    {
-                        buttonCandidate[deviceId] = state.Buttons;
-                        buttonStableCounts[deviceId] = 1;
-                    }
-                    else
-                    {
-                        int count = buttonStableCounts.TryGetValue(deviceId, out var prevCount) ? prevCount : 1;
-                        if (count < BUTTON_DEBOUNCE_REPORTS)
-                            count++;
-                        buttonStableCounts[deviceId] = count;
-                    }
+                            if (!sideMappingLocked)
+                            {
+                                if (rxSentinel)
+                                    _leftDeviceId = deviceId;   // R slot unused -> L Joy-Con
+                                else if (lxSentinel)
+                                    _rightDeviceId = deviceId;  // L slot unused -> R Joy-Con
+                            }
 
-                    if (!buttonDebounced.TryGetValue(deviceId, out uint stableButtons))
-                        stableButtons = 0;
+                            sideTag = deviceId == _leftDeviceId && deviceId == _rightDeviceId ? "S"
+                                : deviceId == _leftDeviceId ? "L"
+                                : deviceId == _rightDeviceId ? "R"
+                                : "?";
 
-                    if (buttonStableCounts.TryGetValue(deviceId, out int stableCount) && stableCount >= BUTTON_DEBOUNCE_REPORTS)
-                    {
-                        stableButtons = buttonCandidate[deviceId];
-                        buttonDebounced[deviceId] = stableButtons;
-                    }
+                            side2 = deviceId == _leftDeviceId && deviceId == _rightDeviceId ? "S"
+                                : deviceId == _leftDeviceId ? "L"
+                                : deviceId == _rightDeviceId ? "R"
+                                : "?";
+                        }
 
-                    state.Buttons = stableButtons;
+                        // Log ONCE per device - exactly when dump count reaches 3
+                        dumpCounts.TryGetValue(deviceId, out int dc);
+                        if (dc == 3 && !stickLoggedDevices.Contains(deviceId)) // fire exactly once
+                        {
+                            int lxC = state.LeftStickX, lyC = state.LeftStickY;
+                            int rxC = state.RightStickX, ryC = state.RightStickY;
+                            try { BeginInvoke(() => DevLog(
+                                $"STICK[{shortId}]({sideTag}) LX={lxC} LY={lyC} RX={rxC} RY={ryC}",
+                                Color.FromArgb(100, 200, 255))); } catch { }
+                            stickLoggedDevices.Add(deviceId);  // never fire again for this device
+                        }
 
-                    _deviceStates[deviceId] = state;
+                        // ------ Warmup gate: suppress buttons until controller has settled ------
+                        warmupReports.TryGetValue(deviceId, out int wc);
+                        warmupReports[deviceId] = wc + 1;
+                        if (wc < WARMUP_REPORTS)
+                            state.Buttons = 0;  // discard init-burst garbage
 
-                    ApplyMouseModeFromDevice(deviceId, data, state);
+                        // Per-device button debounce (word-level): accept a new state only
+                        // after BUTTON_DEBOUNCE_REPORTS consecutive identical reports to
+                        // reduce phantom press/release spikes. For a newly seen device
+                        // (or just after warmup), the debounced state starts at 0; a held
+                        // button therefore takes one additional report to be adopted.
+                        if (!buttonCandidate.TryGetValue(deviceId, out uint candidate) || candidate != state.Buttons)
+                        {
+                            buttonCandidate[deviceId] = state.Buttons;
+                            buttonStableCounts[deviceId] = 1;
+                        }
+                        else
+                        {
+                            int count = buttonStableCounts.TryGetValue(deviceId, out var prevCount) ? prevCount : 1;
+                            if (count < BUTTON_DEBOUNCE_REPORTS)
+                                count++;
+                            buttonStableCounts[deviceId] = count;
+                        }
 
-                    // ── Debug: log only when buttons change or stick moves >80 counts ──
-                    // (Never BeginInvoke on every report — that floods the UI thread queue)
-                    if (enableVerboseInputLog && IsHandleCreated)
-                    {
+                        if (!buttonDebounced.TryGetValue(deviceId, out uint stableButtons))
+                            stableButtons = 0;
+
+                        if (buttonStableCounts.TryGetValue(deviceId, out int stableCount) && stableCount >= BUTTON_DEBOUNCE_REPORTS)
+                        {
+                            stableButtons = buttonCandidate[deviceId];
+                            buttonDebounced[deviceId] = stableButtons;
+                        }
+
+                        state.Buttons = stableButtons;
+
+                        // Publish final per-device state only after all in-frame mutations complete.
+                        // JoyconState is mutable; publishing early can leak partially updated values.
+                        lock (_stateLock)
+                        {
+                            _deviceStates[deviceId] = new JoyconState
+                            {
+                                Buttons = state.Buttons,
+                                LeftStickX = state.LeftStickX,
+                                LeftStickY = state.LeftStickY,
+                                RightStickX = state.RightStickX,
+                                RightStickY = state.RightStickY,
+                            };
+                        }
+
+                        ApplyMouseModeFromDevice(deviceId, data, state);
+
+                        // ------ Debug: log only when buttons change or stick moves >80 counts ------
+                        // (Never BeginInvoke on every report --- that floods the UI thread queue)
+                        if (enableVerboseInputLog && IsHandleCreated)
+                        {
                         lastButtons.TryGetValue(deviceId, out uint prevBtn);
                         lastStickLog.TryGetValue(deviceId, out var prevStick);
                         int lxN = state.LeftStickX, lyN = state.LeftStickY;
@@ -941,10 +1921,6 @@ namespace Joycon2PC.App
                             try
                             {
                                 string sid   = deviceId.Length > 8 ? deviceId[..8] : deviceId;
-                                string side2 = deviceId == _leftDeviceId && deviceId == _rightDeviceId ? "S"
-                                             : deviceId == _leftDeviceId  ? "L"
-                                             : deviceId == _rightDeviceId ? "R" : "?";
-
                                 var btns = new System.Text.StringBuilder();
                                 void B(string n, SW2Button bit) { if (state.IsPressed(bit)) { if (btns.Length > 0) btns.Append(' '); btns.Append(n); } }
                                 B("Up",SW2Button.Up); B("Dn",SW2Button.Down);
@@ -957,7 +1933,7 @@ namespace Joycon2PC.App
                                 B("Home",SW2Button.Home); B("Cap",SW2Button.Capture);
                                 B("C",SW2Button.C);
                                 B("LS",SW2Button.LStick); B("RS",SW2Button.RStick);
-                                string btnStr = btns.Length > 0 ? btns.ToString() : "·";
+                                string btnStr = btns.Length > 0 ? btns.ToString() : ".";
 
                                 static string SD(int v, bool isY) {
                                     int d = v - 1998;
@@ -977,16 +1953,20 @@ namespace Joycon2PC.App
                             }
                             catch { }
                         }
-                    }
+                        }
 
-                    // ── ViGEm — direct call, NOT via BeginInvoke ───────────
-                    var merged = MergeDeviceStates();
-                    try { _bridge?.UpdateFromState(merged); } catch { }
-                    _lastState = merged;
+                        // ------ ViGEm --- direct call, NOT via BeginInvoke ---------------------------------
+                        var merged = MergeDeviceStates();
+                        lock (_outputStateLock)
+                        {
+                            _latestMergedState = CloneState(merged);
+                            _latestMergedStateAvailable = true;
+                        }
+                        _lastState = merged;
 
-                    // ── UI update — only when merged state actually changed ─
-                    if (IsHandleCreated)
-                    {
+                        // ------ UI update --- only when merged state actually changed ---
+                        if (IsHandleCreated)
+                        {
                         bool mergedChanged = lastMerged == null
                             || merged.Buttons    != lastMerged.Buttons
                             || Math.Abs(merged.LeftStickX  - lastMerged.LeftStickX)  > 5
@@ -998,15 +1978,26 @@ namespace Joycon2PC.App
                             lastMerged = merged;
                             try { BeginInvoke(() => UpdateInputDisplay(merged)); } catch { }
                         }
+                        }
+                    }
+                    finally
+                    {
+                        double processMs = (Stopwatch.GetTimestamp() - diagArrivalTicks) * 1000.0 / Stopwatch.Frequency;
+                        RecordDiagnosticSample(deviceId, diagArrivalTicks, processMs, decodeOk, sizeLooksValid);
                     }
                 };
 
-                // ── Immediate status update when a device connects ────────
+                using var scanTimeout = new CancellationTokenSource(30_000);
+                var scanReadySignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                // ------ Immediate status update when a device connects ------------------------
                 // DeviceConnected fires during ScanAsync (not after), so the UI
-                // shows "Connected" the moment GATT subscription succeeds — no
-                // need to wait for the full 30-second scan window to close.
+                // shows "Connected" the moment GATT subscription succeeds.
                 scanner.DeviceConnected += (deviceId, devName) =>
                 {
+                    lock (deviceReportLock)
+                        lastReportByDevice[deviceId] = DateTime.UtcNow;
+
                     try
                     {
                         BeginInvoke(() =>
@@ -1014,26 +2005,54 @@ namespace Joycon2PC.App
                             string shortName = devName.Length > 0 ? devName : deviceId[..Math.Min(12, deviceId.Length)];
                             _lblJoyconStatus.Text      = $"Connected: {shortName}";
                             _lblJoyconStatus.ForeColor = GREEN;
-                            Log($"✔ Connected: {shortName}", GREEN);
+                            Log($"[OK] Connected: {shortName}", GREEN);
                             RefreshDeviceTargetOptions(scanner);
+
+                            int knownCount = scanner.GetKnownDeviceIds().Length;
+                            if (knownCount >= 2)
+                            {
+                                UpdateConnectModeStatusLabel("Pair ready (2/2)", GREEN);
+                                scanReadySignal.TrySetResult(true);
+                            }
+                            else
+                            {
+                                UpdateConnectModeStatusLabel($"Pairing ({knownCount}/2)", YELLOW);
+                            }
                         });
                     }
                     catch { }
                 };
 
-                // ── Scan ─────────────────────────────────────────────────
+                // ------ Scan ---------------------------------------------------------------------------------------------------------------------------------------------------
                 Invoke(() =>
                 {
-                    _lblJoyconStatus.Text      = "Scanning…";
+                    _lblJoyconStatus.Text      = "Scanning...";
                     _lblJoyconStatus.ForeColor = YELLOW;
-                    Log("Checking paired devices + scanning for advertising ones…", ACCENT);
-                    Log("Tip: Joy-Con 2 already paired in Windows? — it will connect automatically.", TXT_DIM);
+                    UpdateConnectModeStatusLabel("Scanning", YELLOW);
+                    Log("Checking paired devices + scanning for advertising ones...", ACCENT);
+                    Log("Tip: Joy-Con 2 already paired in Windows? - it will connect automatically.", TXT_DIM);
                 });
 
-                using var scanTimeout = new CancellationTokenSource(30_000);
                 using var linkedScan  = CancellationTokenSource.CreateLinkedTokenSource(ct, scanTimeout.Token);
-                try   { await scanner.ScanAsync(linkedScan.Token); }
-                catch { /* scan cancelled or timed out */ }
+                var scanTask = scanner.ScanAsync(linkedScan.Token);
+                try
+                {
+                    var completed = await Task.WhenAny(scanTask, scanReadySignal.Task);
+                    if (completed == scanReadySignal.Task)
+                    {
+                        scanTimeout.Cancel();
+                        try { await scanTask; }
+                        catch (OperationCanceledException) { }
+                    }
+                    else
+                    {
+                        await scanTask;
+                    }
+                }
+                catch
+                {
+                    // scan cancelled or timed out
+                }
 
                 if (ct.IsCancellationRequested) break;
 
@@ -1042,60 +2061,108 @@ namespace Joycon2PC.App
                 {
                     Invoke(() =>
                     {
-                        Log("No controllers found — retrying in 3 s…", YELLOW);
+                        Log("No controllers found - retrying in 3 s...", YELLOW);
                         Log("Make sure Joy-Con 2 is paired in Windows Bluetooth Settings.", TXT_DIM);
-                        _lblJoyconStatus.Text      = "Retrying…";
+                        _lblJoyconStatus.Text      = "Retrying...";
                         _lblJoyconStatus.ForeColor = YELLOW;
+                        UpdateConnectModeStatusLabel("No controller, retrying", YELLOW);
                     });
                     try { await Task.Delay(3_000, ct); } catch { break; }
                     continue;
                 }
-
-                // ── Assign L / R IDs from PnP (definitive, overrides early guess) ─
+                // ------ Assign L / R IDs from PnP (definitive, overrides early guess) ---
                 AssignDeviceIds(scanner, ids);
 
                 Invoke(() =>
                 {
-                    bool dual = ids.Length >= 2;
+                    bool dual = _leftDeviceId != null && _rightDeviceId != null && _leftDeviceId != _rightDeviceId;
+                    bool single = !dual && (_leftDeviceId != null || _rightDeviceId != null);
                     string lId = _leftDeviceId?[..Math.Min(8, _leftDeviceId.Length)] ?? "?";
                     string rId = _rightDeviceId?[..Math.Min(8, _rightDeviceId.Length)] ?? "?";
                     string msg = dual
-                        ? $"Both Joy-Cons connected! L={lId}  R={rId}"
+                        ? $"Joy-Con pair connected! L={lId}  R={rId}"
                         : $"Joy-Con 2 connected ({ids[0][..Math.Min(12, ids[0].Length)]})";
                     Log(msg, GREEN);
-                    _lblJoyconStatus.Text      = dual ? "L + R Connected ✔" : "Connected ✔";
+                    _lblJoyconStatus.Text = dual ? "Joy-Con Pair Connected [OK]" : "Joy-Con Single Connected [OK]";
                     _lblJoyconStatus.ForeColor = GREEN;
+                    UpdateConnectModeStatusLabel(single ? "Single ready" : "Pair ready", GREEN);
                     RefreshDeviceTargetOptions(scanner);
                 });
 
                 var sortedIds = SortDeviceIdsForPlayerOrder(scanner, ids);
                 DevLog("Connect flow: joycon2cpp-style init -> input mode -> LED -> sound", TXT_DIM);
 
-                // ── Post-connect init: switch to continuous full-rate reporting ─
+                // ------ Post-connect init: switch to continuous full-rate reporting ---
                 // Win10 typically needs a longer settle delay and more retries than Win11.
                 var inputModeInit = GetInputModeInitProfile();
                 try { await Task.Delay(inputModeInit.InitialDelayMs, ct); } catch { break; }
+                Invoke(() => UpdateConnectModeStatusLabel("Initializing command channel", ACCENT));
                 await InitializeCommandChannelAsync(scanner, sortedIds, ct);
+                Invoke(() => UpdateConnectModeStatusLabel("Initializing input stream", ACCENT));
                 await ConfigureContinuousInputModeAsync(scanner, sortedIds, inputModeInit, ct);
+                Invoke(() => UpdateConnectModeStatusLabel("Initializing feedback", ACCENT));
                 await ApplyConnectFeedbackAsync(scanner, sortedIds, ct);
+                Invoke(() => UpdateConnectModeStatusLabel("Ready", GREEN));
 
-                // ── Wait: stay here until all devices disconnect or user stops ─
+                // ------ Wait: stay here until all devices disconnect or user stops ---
                 while (!ct.IsCancellationRequested)
                 {
                     try { await Task.Delay(250, ct); } catch { break; }
 
-                    int knownCount = scanner.GetKnownDeviceIds().Length;
+                    var knownIds = scanner.GetKnownDeviceIds();
+                    int knownCount = knownIds.Length;
                     if (knownCount <= 0)
                         break;
+
+                    bool dualExpected = _leftDeviceId != null
+                        && _rightDeviceId != null
+                        && _leftDeviceId != _rightDeviceId;
+
+                    if (dualExpected)
+                    {
+                        var now = DateTime.UtcNow;
+                        var staleTargets = new List<string>();
+                        string[] criticalIds = new[] { _leftDeviceId!, _rightDeviceId! };
+
+                        lock (deviceReportLock)
+                        {
+                            foreach (var id in criticalIds.Distinct())
+                            {
+                                if (!knownIds.Contains(id))
+                                    continue;
+
+                                DateTime seen = lastReportByDevice.TryGetValue(id, out var t) ? t : lastReportUtc;
+                                if ((now - seen) >= TimeSpan.FromMilliseconds(2800))
+                                    staleTargets.Add(id);
+                            }
+                        }
+
+                        if (staleTargets.Count > 0 && (now - lastInputModeRecoveryUtc) >= TimeSpan.FromSeconds(4))
+                        {
+                            lastInputModeRecoveryUtc = now;
+                            string staleText = string.Join(",", staleTargets.Select(id => id[..Math.Min(8, id.Length)]));
+                            Invoke(() => DevLog($"Stale input detected ({staleText}) -> reapplying input mode", YELLOW));
+
+                            try
+                            {
+                                await ConfigureContinuousInputModeAsync(scanner, staleTargets.ToArray(), GetInputModeRecoveryProfile(), ct);
+                            }
+                            catch
+                            {
+                                // Recovery write path is best-effort; fall through to silence checks.
+                            }
+                        }
+                    }
 
                     var silence = DateTime.UtcNow - lastReportUtc;
                     if (silence >= TimeSpan.FromSeconds(6))
                     {
                         Invoke(() =>
                         {
-                            Log($"BLE link silent for {silence.TotalSeconds:F1}s with {knownCount} known device(s) — forcing reconnect.", YELLOW);
-                            _lblJoyconStatus.Text      = "Link silent — reconnecting…";
+                            Log($"BLE link silent for {silence.TotalSeconds:F1}s with {knownCount} known device(s) - forcing reconnect.", YELLOW);
+                            _lblJoyconStatus.Text      = "Link silent - reconnecting...";
                             _lblJoyconStatus.ForeColor = YELLOW;
+                            UpdateConnectModeStatusLabel("Link silent, reconnecting", YELLOW);
                         });
                         scanner.DisconnectAll();
                         break;
@@ -1104,12 +2171,13 @@ namespace Joycon2PC.App
 
                 if (ct.IsCancellationRequested) break;
 
-                // All devices disconnected — attempt reconnect
+                // All devices disconnected - attempt reconnect
                 Invoke(() =>
                 {
-                    Log("Joy-Con disconnected — reconnecting…", YELLOW);
-                    _lblJoyconStatus.Text      = "Reconnecting…";
+                    Log("Joy-Con disconnected - reconnecting...", YELLOW);
+                    _lblJoyconStatus.Text      = "Reconnecting...";
                     _lblJoyconStatus.ForeColor = YELLOW;
+                    UpdateConnectModeStatusLabel("Disconnected, reconnecting", YELLOW);
                 });
                 try { await Task.Delay(2_000, ct); } catch { break; }
             }
@@ -1118,6 +2186,7 @@ namespace Joycon2PC.App
             {
                 _lblJoyconStatus.Text      = "Stopped";
                 _lblJoyconStatus.ForeColor = TXT_DIM;
+                UpdateConnectModeStatusLabel("Stopped", TXT_DIM);
             });
         }
 
@@ -1131,7 +2200,7 @@ namespace Joycon2PC.App
             {
                 BeginInvoke(() =>
                 {
-                    Log("System resume detected — auto reconnecting BLE...", YELLOW);
+                    Log("System resume detected - auto reconnecting BLE...", YELLOW);
                     OnReconnectClicked();
                 });
             }
@@ -1149,15 +2218,17 @@ namespace Joycon2PC.App
         /// </summary>
         private void AssignDeviceIds(BLEScanner scanner, string[] ids)
         {
-            // Pass 0: device name — most reliable (Windows names: "Joy-Con 2 (L)" / "Joy-Con 2 (R)")
-            string? newLeft = null, newRight = null;
-            foreach (var id in ids)
+            lock (_stateLock)
             {
-                string n = scanner.GetDeviceName(id);
-                Console.WriteLine($"[Assign] id={id[..Math.Min(8,id.Length)]} name='{n}' pid=0x{scanner.GetProductId(id):X4}");
-                if (n.Contains("(L)", StringComparison.OrdinalIgnoreCase)) newLeft  = id;
-                else if (n.Contains("(R)", StringComparison.OrdinalIgnoreCase)) newRight = id;
-            }
+                // Pass 0: device name --- most reliable (Windows names: "Joy-Con 2 (L)" / "Joy-Con 2 (R)")
+                string? newLeft = null, newRight = null;
+                foreach (var id in ids)
+                {
+                    string n = scanner.GetDeviceName(id);
+                    Console.WriteLine($"[Assign] id={id[..Math.Min(8,id.Length)]} name='{n}' pid=0x{scanner.GetProductId(id):X4}");
+                    if (n.Contains("(L)", StringComparison.OrdinalIgnoreCase)) newLeft  = id;
+                    else if (n.Contains("(R)", StringComparison.OrdinalIgnoreCase)) newRight = id;
+                }
 
             // Pass 1: PnP IDs (sometimes 0x0000 for NS2 over BLE, but try anyway)
             foreach (var id in ids)
@@ -1167,10 +2238,16 @@ namespace Joycon2PC.App
                 else if (pid == BLEScanner.PID_JOYCON_R && newRight == null) newRight = id;
             }
 
-            // Pass 2: use sentinel-based IDs set during RawReportReceived
-            // (these are already in _leftDeviceId / _rightDeviceId)
-            if (newLeft == null)  newLeft  = _leftDeviceId;
-            if (newRight == null) newRight = _rightDeviceId;
+            // Pass 2: use sentinel-based IDs set during RawReportReceived.
+            // Ignore invalid transient state where both slots point to same device.
+            bool existingDistinct = _leftDeviceId != null
+                && _rightDeviceId != null
+                && !string.Equals(_leftDeviceId, _rightDeviceId, StringComparison.OrdinalIgnoreCase);
+            if (existingDistinct)
+            {
+                if (newLeft == null) newLeft = _leftDeviceId;
+                if (newRight == null) newRight = _rightDeviceId;
+            }
 
             // Pass 3: use persisted raw sentinel flags (set during RawReportReceived).
             // These are reliable because they use the raw lx/rx values before neutralisation.
@@ -1182,43 +2259,48 @@ namespace Joycon2PC.App
                 {
                     bool lSentinel = _deviceLStickSentinel.TryGetValue(id, out var ls) && ls;
                     bool rSentinel = _deviceRStickSentinel.TryGetValue(id, out var rs) && rs;
-                    // R slot sentinel → this is Joy-Con L
+                    // R slot sentinel --- this is Joy-Con L
                     if (rSentinel && !lSentinel && newLeft  == null) newLeft  = id;
-                    // L slot sentinel → this is Joy-Con R
+                    // L slot sentinel --- this is Joy-Con R
                     if (lSentinel && !rSentinel && newRight == null) newRight = id;
                 }
             }
 
-            // Pass 4: single Joy-Con — if only one device connected, assign it as its own side
-            // and mark the other side as the SAME device (isSingleDevice path in MergeDeviceStates).
+            // Pass 4: single Joy-Con - keep its real side to avoid mapping R stick as L stick.
             if (ids.Length == 1)
             {
-                // Only one controller — figure out which side it is from name/PnP,
-                // then assign both pointers to it so MergeDeviceStates uses its full axes.
+                // Only one controller - infer side from name/PnP/sentinel and keep the other side null.
                 string solo = ids[0];
                 string soloName = scanner.GetDeviceName(solo);
-                if (soloName.Contains("(R)", StringComparison.OrdinalIgnoreCase))
+
+                bool soloIsRight = soloName.Contains("(R)", StringComparison.OrdinalIgnoreCase)
+                    || scanner.GetProductId(solo) == BLEScanner.PID_JOYCON_R
+                    || (_deviceLStickSentinel.TryGetValue(solo, out var lSent) && lSent);
+
+                if (soloIsRight)
                 {
                     newRight = solo;
-                    newLeft  = solo; // will trigger isSingleDevice path
+                    newLeft = null;
                 }
                 else
                 {
-                    newLeft  = solo;
-                    newRight = solo; // will trigger isSingleDevice path
+                    newLeft = solo;
+                    newRight = null;
                 }
-                Console.WriteLine($"[Assign] Single Joy-Con mode: {soloName} — both slots → {solo[..Math.Min(8,solo.Length)]}");
+                Console.WriteLine($"[Assign] Single Joy-Con mode: {soloName} (L={newLeft?[..Math.Min(8, newLeft.Length)] ?? "-"}, R={newRight?[..Math.Min(8, newRight.Length)] ?? "-"})");
             }
             else
             {
-                // Two or more — last resort
-                if (newLeft  == null && newRight == null) { newLeft = ids[0]; newRight = ids[1]; }
-                else if (newLeft  == null) newLeft  = newRight;
-                else if (newRight == null) newRight = newLeft;
-            }
+                // Two or more: leave unresolved slots as null.
+                // RawReportReceived sentinel detection fills them in from the first reports.
+                // DO NOT assign same ID to both slots (isSingleDevice=true causes RS jitter).
+                if (newLeft == null && newRight == null && ids.Length >= 2)
+                    Console.WriteLine("[Assign] Both IDs unresolved; sentinel detection will complete assignment.");
 
-            _leftDeviceId  = newLeft;
-            _rightDeviceId = newRight;
+            }
+                _leftDeviceId  = newLeft;
+                _rightDeviceId = newRight;
+            }
         }
 
         private readonly struct InputModeInitProfile
@@ -1243,6 +2325,15 @@ namespace Joycon2PC.App
 
             // Win10 often ignores early mode-switch writes; favor reliability over startup speed.
             return new InputModeInitProfile(initialDelayMs: 700, attempts: 6, retryDelayMs: 180);
+        }
+
+        private static InputModeInitProfile GetInputModeRecoveryProfile()
+        {
+            // Recovery path runs while streaming; use short retries to avoid visible stalls.
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
+                return new InputModeInitProfile(initialDelayMs: 0, attempts: 2, retryDelayMs: 90);
+
+            return new InputModeInitProfile(initialDelayMs: 0, attempts: 3, retryDelayMs: 120);
         }
 
         private async Task ConfigureContinuousInputModeAsync(BLEScanner scanner, string[] deviceIds, InputModeInitProfile profile, CancellationToken ct)
@@ -1310,25 +2401,59 @@ namespace Joycon2PC.App
         private async Task ApplyConnectFeedbackAsync(BLEScanner scanner, string[] sortedIds, CancellationToken ct)
         {
             var soundSettings = GetConnectSoundSettings();
+            int feedbackAttempts = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000) ? 2 : 4;
+
+            async Task<bool> SendWithRetryAsync(string deviceId, byte[] payload, string tag)
+            {
+                for (int attempt = 1; attempt <= feedbackAttempts && !ct.IsCancellationRequested; attempt++)
+                {
+                    bool ok;
+                    try
+                    {
+                        ok = await scanner.SendSubcommandAsync(deviceId, payload, tag, ct);
+                    }
+                    catch
+                    {
+                        ok = false;
+                    }
+
+                    if (ok)
+                        return true;
+
+                    if (attempt < feedbackAttempts)
+                    {
+                        try { await Task.Delay(80 * attempt, ct); }
+                        catch { return false; }
+                    }
+                }
+
+                return false;
+            }
 
             for (int p = 0; p < sortedIds.Length; p++)
             {
                 string id = sortedIds[p];
                 string side = ResolveDeviceSideLabel(scanner, id);
-                int playerNum = p + 1;
+                int playerNum = CONNECT_FEEDBACK_PLAYER_NUM;
 
                 try
                 {
                     // joycon2cpp-exact LED command path.
-                    await scanner.SendSubcommandAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2PlayerLedCompat(playerNum), $"led-cpp-p{playerNum}", ct);
-                    Invoke(() => Log($"  Joy-Con {side} LED confirmed (P{playerNum})", ACCENT));
+                    bool ledOk = await SendWithRetryAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2PlayerLedCompat(playerNum), $"led-cpp-p{playerNum}");
+                    if (ledOk)
+                        Invoke(() => Log($"  Joy-Con {side} LED confirmed (shared P{playerNum})", ACCENT));
+                    else
+                        Invoke(() => Log($"  Joy-Con {side} LED send failed after retries", YELLOW));
 
                     if (soundSettings.Enabled)
                     {
                         await Task.Delay(25, ct);
-                        await scanner.SendSubcommandAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2SoundCompat(soundSettings.Preset), $"sound-cpp-0x{soundSettings.Preset:X2}", ct);
+                        bool soundOk = await SendWithRetryAsync(id, Joycon2PC.Core.SubcommandBuilder.BuildNS2SoundCompat(soundSettings.Preset), $"sound-cpp-0x{soundSettings.Preset:X2}");
                         byte preset = soundSettings.Preset;
-                        Invoke(() => Log($"  Joy-Con {side} connect sound sent (0x{preset:X2})", ACCENT));
+                        if (soundOk)
+                            Invoke(() => Log($"  Joy-Con {side} connect sound sent (0x{preset:X2})", ACCENT));
+                        else
+                            Invoke(() => Log($"  Joy-Con {side} connect sound failed (0x{preset:X2})", YELLOW));
                     }
                 }
                 catch (Exception ex)
@@ -1376,32 +2501,34 @@ namespace Joycon2PC.App
         /// <summary>
         /// Merge states from all connected devices into one combined JoyconState.
         ///
-        /// Buttons  — OR'd from every device (each Joy-Con carries its own half of the buttons).
-        /// L Stick  — from the device identified as Joy-Con L (bytes [10..12] of its report).
-        /// R Stick  — from the device identified as Joy-Con R.
+        /// Buttons  --- OR'd from every device (each Joy-Con carries its own half of the buttons).
+        /// L Stick  --- from the device identified as Joy-Con L (bytes [10..12] of its report).
+        /// R Stick  --- from the device identified as Joy-Con R.
         ///             Joy-Con R sends its physical stick at the RIGHT-stick bytes [13..15];
         ///             if those are at centre (1998) we also try the left-stick bytes [10..12]
         ///             as a fallback in case the protocol puts it there on some firmware.
         /// </summary>
         private JoyconState MergeDeviceStates()
         {
-            // Default sticks to centre so the visualiser and ViGEm start neutral
-            var merged = new JoyconState
+            lock (_stateLock)
             {
-                LeftStickX  = 1998, LeftStickY  = 1998,
-                RightStickX = 1998, RightStickY = 1998,
-            };
+                // Default sticks to centre so the visualiser and ViGEm start neutral
+                var merged = new JoyconState
+                {
+                    LeftStickX  = 1998, LeftStickY  = 1998,
+                    RightStickX = 1998, RightStickY = 1998,
+                };
 
-            if (_deviceStates.Count == 0) return merged;
+                if (_deviceStates.Count == 0) return merged;
 
-            // ── Dual / single device detection ────────────────────────────
+            // ------ Dual / single device detection ------------------------------------------------------------------------------------
             bool isSingleDevice = _leftDeviceId != null
                                 && _leftDeviceId == _rightDeviceId;
             bool dualMode = !isSingleDevice
                           && _leftDeviceId != null
                           && _rightDeviceId != null;
 
-            // ── Buttons — side-masked OR in dual mode ───────────────────
+            // ------ Buttons --- side-masked OR in dual mode ---------------------------------------------------------
             // L Joy-Con owns: ZL/L/D-pad/Minus/LStick/Capture/GripLeft/LSL/LSR
             // R Joy-Con owns: ZR/R/C/ABXY/Plus/Home/RStick/GripRight/RSL/RSR
             // Masking prevents start-up ghost presses on one side from contaminating
@@ -1424,16 +2551,22 @@ namespace Joycon2PC.App
                 uint rB = _deviceStates.TryGetValue(_rightDeviceId!, out var rsBtn) ? rsBtn.Buttons & R_MASK : 0u;
                 merged.Buttons = lB | rB;
             }
+            else if (isSingleDevice)
+            {
+                // Single mode should only consume the selected device's buttons.
+                if (_leftDeviceId != null && _deviceStates.TryGetValue(_leftDeviceId, out var singleState))
+                    merged.Buttons = singleState.Buttons;
+            }
             else
             {
-                // Single controller or IDs not yet assigned — OR all buttons as-is.
+                // Single controller or IDs not yet assigned --- OR all buttons as-is.
                 foreach (var s in _deviceStates.Values)
                     merged.Buttons |= s.Buttons;
             }
 
             if (isSingleDevice)
             {
-                // Single controller — use whichever stick bytes are NOT at sentinel (1998).
+                // Single controller --- use whichever stick bytes are NOT at sentinel (1998).
                 // Joy-Con L: real data on LeftStick bytes [10..12], RightStick = 1998
                 // Joy-Con R: real data on RightStick bytes [13..15], LeftStick = 1998
                 if (_deviceStates.TryGetValue(_leftDeviceId!, out var s))
@@ -1443,13 +2576,13 @@ namespace Joycon2PC.App
 
                     if (rReal && !lReal)
                     {
-                        // Joy-Con R solo: physical stick → LeftStick output (primary axis for games)
+                        // Joy-Con R solo: physical stick --- LeftStick output (primary axis for games)
                         merged.LeftStickX  = s.RightStickX;
                         merged.LeftStickY  = s.RightStickY;
                     }
                     else
                     {
-                        // Joy-Con L solo or unknown: physical stick → LeftStick output
+                        // Joy-Con L solo or unknown: physical stick --- LeftStick output
                         merged.LeftStickX  = s.LeftStickX;
                         merged.LeftStickY  = s.LeftStickY;
                     }
@@ -1467,33 +2600,49 @@ namespace Joycon2PC.App
                 // Joy-Con R: its physical stick is at the RIGHT bytes [13..15].
                 // When active it reads ~1894-2100 (not exactly 1998).
                 // If still at 1998 (sentinel was neutralised in the report handler),
-                // the R controller hasn't sent a real value yet — leave merged at 1998.
+                // the R controller hasn't sent a real value yet --- leave merged at 1998.
                 if (_deviceStates.TryGetValue(_rightDeviceId!, out var rs))
                 {
                     // RightStick field is authoritative for Joy-Con R.
-                    // LeftStick field on the R device = 1998 (sentinel was neutralised) — ignore it.
+                    // LeftStick field on the R device = 1998 (sentinel was neutralised) --- ignore it.
                     merged.RightStickX = rs.RightStickX;
                     merged.RightStickY = rs.RightStickY;
                 }
             }
             else
             {
-                // IDs not yet fully assigned — output what we have but do NOT clobber IDs here.
+                // IDs not yet fully assigned --- output what we have but do NOT clobber IDs here.
                 // The report handler will assign the correct IDs when the sentinel is seen.
                 // Just pass through whatever data we have so the UI isn't frozen.
-                if (_leftDeviceId != null && _deviceStates.TryGetValue(_leftDeviceId, out var partL))
+                if (_leftDeviceId != null && _rightDeviceId == null && _deviceStates.TryGetValue(_leftDeviceId, out var onlyL))
                 {
-                    merged.LeftStickX = partL.LeftStickX;
-                    merged.LeftStickY = partL.LeftStickY;
+                    // Single L: keep normal mapping on left stick output.
+                    merged.LeftStickX = onlyL.LeftStickX;
+                    merged.LeftStickY = onlyL.LeftStickY;
                 }
-                if (_rightDeviceId != null && _deviceStates.TryGetValue(_rightDeviceId, out var partR))
+                else if (_rightDeviceId != null && _leftDeviceId == null && _deviceStates.TryGetValue(_rightDeviceId, out var onlyR))
                 {
-                    merged.RightStickX = partR.RightStickX;
-                    merged.RightStickY = partR.RightStickY;
+                    // Single R: map its physical stick to LeftStick so most games remain playable.
+                    merged.LeftStickX = onlyR.RightStickX;
+                    merged.LeftStickY = onlyR.RightStickY;
+                }
+                else
+                {
+                    if (_leftDeviceId != null && _deviceStates.TryGetValue(_leftDeviceId, out var partL))
+                    {
+                        merged.LeftStickX = partL.LeftStickX;
+                        merged.LeftStickY = partL.LeftStickY;
+                    }
+                    if (_rightDeviceId != null && _deviceStates.TryGetValue(_rightDeviceId, out var partR))
+                    {
+                        merged.RightStickX = partR.RightStickX;
+                        merged.RightStickY = partR.RightStickY;
+                    }
                 }
             }
 
-            return merged;
+                return merged;
+            }
         }
 #endif
 
@@ -1757,7 +2906,7 @@ namespace Joycon2PC.App
 
                 if (stickY != 0)
                 {
-                    // Up on stick (higher raw Y) → positive wheel delta = scroll up in Windows.
+                    // Up on stick (higher raw Y) --- positive wheel delta = scroll up in Windows.
                     _mouseScrollAccumulator += stickY * MOUSE_SCROLL_GAIN;
 
                     int clicks = (int)Math.Truncate(_mouseScrollAccumulator);
@@ -1802,8 +2951,10 @@ namespace Joycon2PC.App
 
         private void InitializeOptionControls()
         {
+            UpdateConnectModeStatusLabel("Idle", TXT_DIM);
+
             _cmbDeviceTarget.Items.Clear();
-            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "All connected Joy-Cons", DeviceId = null });
+            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "Connected pair", DeviceId = null });
             _cmbDeviceTarget.SelectedIndex = 0;
 
             _cmbSoundPreset.Items.AddRange(new object[]
@@ -1834,19 +2985,6 @@ namespace Joycon2PC.App
             });
             _cmbLedPattern.SelectedIndex = 1;
 
-            _cmbRumblePreset.Items.AddRange(new object[]
-            {
-                new RumblePresetOption { Label = "Short pulse", LargeMotor = 255, SmallMotor = 255, DurationMs = 120 },
-                new RumblePresetOption { Label = "Medium pulse", LargeMotor = 255, SmallMotor = 255, DurationMs = 220 },
-                new RumblePresetOption { Label = "Long pulse", LargeMotor = 255, SmallMotor = 255, DurationMs = 360 },
-            });
-            _cmbRumblePreset.SelectedIndex = 1;
-
-            // Joy-Con 2 BLE rumble is not supported — joycon2cpp has no rumble implementation.
-            // The 0x50 keep-alive format does not trigger the HD Rumble actuator.
-            _btnTestRumble.Enabled   = false;
-            _btnTestRumble.Text      = "Rumble (N/A)";
-            _cmbRumblePreset.Enabled = false;
         }
 
         private void RefreshDeviceTargetOptions(BLEScanner? scanner)
@@ -1862,7 +3000,7 @@ namespace Joycon2PC.App
 
             string? previousId = (_cmbDeviceTarget.SelectedItem as DeviceTargetOption)?.DeviceId;
             _cmbDeviceTarget.Items.Clear();
-            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "All connected Joy-Cons", DeviceId = null });
+            _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = "Connected setup (pair/single)", DeviceId = null });
 
             if (scanner != null)
             {
@@ -1873,7 +3011,7 @@ namespace Joycon2PC.App
                     string name = scanner.GetDeviceName(id);
                     string label = string.IsNullOrWhiteSpace(name)
                         ? $"Joy-Con {side}"
-                        : $"Joy-Con {side} · {name}";
+                        : $"Joy-Con {side} - {name}";
                     _cmbDeviceTarget.Items.Add(new DeviceTargetOption { Label = label, DeviceId = id });
                 }
             }
@@ -1907,10 +3045,6 @@ namespace Joycon2PC.App
 
         private byte GetSelectedLedPattern()
             => (_cmbLedPattern?.SelectedItem as ByteOption)?.Value ?? 0x01;
-
-        private RumblePresetOption GetSelectedRumblePreset()
-            => (_cmbRumblePreset?.SelectedItem as RumblePresetOption)
-            ?? new RumblePresetOption { Label = "Medium pulse", LargeMotor = 255, SmallMotor = 255, DurationMs = 220 };
 
         private (bool Enabled, byte Preset) GetConnectSoundSettings()
         {
@@ -1993,44 +3127,9 @@ namespace Joycon2PC.App
             }
         }
 
-        private async Task TriggerManualRumbleTestAsync()
-        {
-            var scanner = _scanner;
-            if (scanner == null)
-            {
-                Log("No active BLE session. Connect Joy-Con first.", YELLOW);
-                return;
-            }
-
-            var targetIds = GetSelectedTargetDeviceIds(scanner);
-            if (targetIds.Length == 0)
-            {
-                Log("No connected Joy-Con available for rumble test.", YELLOW);
-                return;
-            }
-
-            var preset = GetSelectedRumblePreset();
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-
-            foreach (var id in targetIds)
-            {
-                string side = ResolveDeviceSideLabel(scanner, id);
-                bool started = await scanner.SendRumbleAsync(id, preset.LargeMotor, preset.SmallMotor, $"manual-rumble-{preset.DurationMs}ms-on", cts.Token, allowOff: true);
-                if (!started)
-                    continue;
-
-                Log($"Manual rumble pulse sent to Joy-Con {side} ({preset.Label}).", ACCENT);
-            }
-
-            try { await Task.Delay(preset.DurationMs, cts.Token); } catch { return; }
-
-            foreach (var id in targetIds)
-                await scanner.SendRumbleAsync(id, 0, 0, $"manual-rumble-{preset.DurationMs}ms-off", cts.Token, allowOff: true);
-        }
-
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  PARSER CALLBACK  (called from background thread)
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private void OnStateChanged(JoyconState state)
         {
             // forward to ViGEm
@@ -2049,10 +3148,10 @@ namespace Joycon2PC.App
 
         private void UpdateInputDisplay(JoyconState state)
         {
-            // ── Stick visualisers ──────────────────────────────────────────
+            // ------ Stick visualisers ------------------------------------------------------------------------------------------------------------------------------
             _joyconViz?.SetSticks(state.LeftStickX, state.LeftStickY, state.RightStickX, state.RightStickY);
 
-            // ── Button indicators ──────────────────────────────────────────
+            // ------ Button indicators ------------------------------------------------------------------------------------------------------------------------------
             SetBtn("A",    state.IsPressed(SW2Button.A));
             SetBtn("B",    state.IsPressed(SW2Button.B));
             SetBtn("X",    state.IsPressed(SW2Button.X));
@@ -2079,9 +3178,9 @@ namespace Joycon2PC.App
 
         private void DrawStick(Panel panel, int rawX, int rawY)
         {
-            // NS2 12-bit raw → normalised -1..1  (factory centre = 1998)
+            // NS2 12-bit raw --- normalised -1..1  (factory centre = 1998)
             const float ns2Centre = 1998f;
-            const float ns2Range  = 1251f;  // ≈ half of 3249-746, used for symmetry
+            const float ns2Range  = 1251f;  // ~= half of 3249-746, used for symmetry
             float nx = Math.Clamp((rawX - ns2Centre) / ns2Range, -1f, 1f);
             float ny = Math.Clamp((rawY - ns2Centre) / ns2Range, -1f, 1f);
 
@@ -2111,9 +3210,9 @@ namespace Joycon2PC.App
             old?.Dispose();
         }
 
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  LOGGING
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private void Log(string text, Color? color = null, LogAudience audience = LogAudience.User)
         {
             if (_log.InvokeRequired) { Invoke(() => Log(text, color, audience)); return; }
@@ -2190,12 +3289,18 @@ namespace Joycon2PC.App
             _log.SelectedText = string.Empty;
         }
 
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  FORM CLOSE
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             _cts?.Cancel();
+            StopOutputPump();
+            Interlocked.Increment(ref _diagCaptureVersion);
+            _diagCaptureActive = false;
+            _healthTimer?.Stop();
+            _healthTimer?.Dispose();
+            _healthTimer = null;
             if (_powerEventsSubscribed)
             {
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
@@ -2205,9 +3310,9 @@ namespace Joycon2PC.App
             base.OnFormClosing(e);
         }
 
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         //  JOY-CON 2 VISUALIZER  (custom-drawn GDI+ panel)
-        // ══════════════════════════════════════════════════════════════════
+        // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         private sealed class JoyConVisualizerPanel : Panel
         {
             private readonly Dictionary<string, bool> _p = new();
@@ -2261,11 +3366,23 @@ namespace Joycon2PC.App
 
             public void SetSticks(int rawLX, int rawLY, int rawRX, int rawRY)
             {
-                const float C = 1998f, R = 1251f;
-                float lx = Math.Clamp((rawLX - C) / R, -1f, 1f);
-                float ly = Math.Clamp((rawLY - C) / R, -1f, 1f);
-                float rx = Math.Clamp((rawRX - C) / R, -1f, 1f);
-                float ry = Math.Clamp((rawRY - C) / R, -1f, 1f);
+                // Apply the same deadzone math as ViGEmBridge so the visualiser dot
+                // stays centred for any stick position that produces zero ViGEm output.
+                // Reuse shared constant to keep UI and output mapping in sync.
+                static float Apply(int raw) {
+                    const float C = 1998f, R = 1251f;
+                    const float DZ = Joycon2PC.ViGEm.ViGEmBridge.AxisOutputDeadzone;
+                    const float MAX = 32767f, RANGE = MAX - DZ;
+                    float v = Math.Clamp((raw - C) / R, -1f, 1f);
+                    float i16 = v * MAX;
+                    float abs = Math.Abs(i16);
+                    if (abs <= DZ) return 0f;
+                    return (i16 < 0f ? -1f : 1f) * (abs - DZ) / RANGE;
+                }
+                float lx = Apply(rawLX);
+                float ly = Apply(rawLY);
+                float rx = Apply(rawRX);
+                float ry = Apply(rawRY);
                 if (lx == _lx && ly == _ly && rx == _rx && ry == _ry) return;
                 _lx = lx; _ly = ly; _rx = rx; _ry = ry;
                 Invalidate();
@@ -2284,8 +3401,8 @@ namespace Joycon2PC.App
                 DrawRJoyCon(g);
             }
 
-            // ── L Joy-Con 2 ──────────────────────────────────────────────────
-            //  Front face (top→bottom): ZL/L triggers, −, L-Stick, LED, D-pad, Cap
+            // ------ L Joy-Con 2 ------------------------------------------------------------------------------------------------------------------------------------------------------
+            //  Front face (top---bottom): ZL/L triggers, ---, L-Stick, LED, D-pad, Cap
             private void DrawLJoyCon(Graphics g)
             {
                 const int bx = 8, by = 44, bw = 174, bh = 294;
@@ -2304,7 +3421,7 @@ namespace Joycon2PC.App
                 // Body outline
                 DrawRR(g, new Pen(Color.FromArgb(68, 68, 76), 1.5f), bx, by, bw, bh, 26);
 
-                // − button (top-right of face)
+                // --- button (top-right of face)
                 CircBtn(g, 150, 75, 10, "-", On("-"));
 
                 // Left Stick (upper-center of face)
@@ -2326,11 +3443,11 @@ namespace Joycon2PC.App
                 g.FillRectangle(new SolidBrush(C_CROSS), dpx - 9, dpy - 9, 18, 18);
 
                 // Screenshot / Capture button
-                SqBtn(g, 130, 258, 20, 20, "■", On("Cap"), Ac("Cap"));
+                SqBtn(g, 130, 258, 20, 20, "[]", On("Cap"), Ac("Cap"));
             }
 
-            // ── R Joy-Con 2 ──────────────────────────────────────────────────
-            //  Front face (top→bottom): ZR/R triggers, +, ABXY+Home (upper), R-Stick, C
+            // ------ R Joy-Con 2 ------------------------------------------------------------------------------------------------------------------------------------------------------
+            //  Front face (top---bottom): ZR/R triggers, +, ABXY+Home (upper), R-Stick, C
             private void DrawRJoyCon(Graphics g)
             {
                 const int bx = 252, by = 44, bw = 174, bh = 294;
@@ -2373,7 +3490,7 @@ namespace Joycon2PC.App
                 CircBtn(g, 315, 286, 12, "C", On("C"));
             }
 
-            // ── drawing primitives ──────────────────────────────────────────
+            // ------ drawing primitives ------------------------------------------------------------------------------------------------------------------------------
             private void StickViz(Graphics g, int cx, int cy, int r,
                                   float nx, float ny, Color rim, bool pressed)
             {
