@@ -214,24 +214,27 @@ namespace Joycon2PC.App.Bluetooth
 
     private static bool IsPotentialJoyconCandidate(string name, string deviceId, bool isPaired)
     {
+        // Rule 1: Known Nintendo device names → always attempt
         if (IsNintendoDevice(name))
             return true;
 
-        // Some Windows setups expose bonded Joy-Con 2 controllers with generic
-        // names like "DeviceName" even though the underlying BLE device is valid.
-        // In that case, allow paired BTHLE devices to be probed by service UUID.
+        // Rule 2: Always attempt pairing for unpaired devices
+        // We'll verify via NS2 service UUID after connecting
         if (!isPaired)
-            return false;
+            return true; // Changed from false → let service UUID validation decide
 
+        // Rule 3: Paired devices with generic names → allow if BLE device ID
         bool genericName = string.IsNullOrWhiteSpace(name)
             || string.Equals(name, "DeviceName", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "Bluetooth LE Device", StringComparison.OrdinalIgnoreCase);
 
         if (!genericName)
-            return false;
+            return false; // Known name but not Nintendo → skip
 
+        // Rule 4: Generic BLE device → attempt if BLE device ID
         return deviceId.Contains("BTHLE", StringComparison.OrdinalIgnoreCase)
-            || deviceId.Contains("Dev_", StringComparison.OrdinalIgnoreCase);
+            || deviceId.Contains("Dev_", StringComparison.OrdinalIgnoreCase)
+            || deviceId.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase); // Added: catch more BLE devices
     }
 
     private async Task ConnectDeviceAsync(InTheHand.Bluetooth.BluetoothDevice dev, CancellationToken cancellationToken)
@@ -259,13 +262,35 @@ namespace Joycon2PC.App.Bluetooth
             }
         }
 
-        try
-        {
-            await dev.Gatt.ConnectAsync();
-            string deviceId = dev.Id;
-            Console.WriteLine($"    GATT connected: {deviceId}");
+            try
+            {
+                await dev.Gatt.ConnectAsync();
+                string deviceId = dev.Id;
+                Console.WriteLine($"    GATT connected: {deviceId}");
 
-            var services = await dev.Gatt.GetPrimaryServicesAsync();
+                var services = await dev.Gatt.GetPrimaryServicesAsync();
+
+                // Validate NS2 service exists - this is the definitive Joy-Con 2 check
+                bool hasNS2Service = false;
+                foreach (var svc in services)
+                {
+                    if (string.Equals(svc.Uuid.ToString(), NS2_SERVICE_UUID, StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasNS2Service = true;
+                        break;
+                    }
+                }
+
+                if (!hasNS2Service)
+                {
+                    Console.WriteLine($"    Not a Joy-Con 2 (NS2 service not found). Disconnecting.");
+                    TraceInfo(deviceId, "Device rejected: NS2 service UUID not present");
+                    try { dev.Gatt.Disconnect(); } catch { }
+                    RemoveKnownDevice(deviceId, "NS2 service not found");
+                    return; // Exit early - this device is not a Joy-Con 2
+                }
+
+                Console.WriteLine($"    ✓ Confirmed Joy-Con 2 (NS2 service found)");
 
             // Read PnP ID to identify L vs R
             try
@@ -467,7 +492,10 @@ namespace Joycon2PC.App.Bluetooth
                                     _subscribedInputDevices.Add(deviceId);
                                 TraceInfo(deviceId, $"Fallback notify active on {ch.Uuid}");
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                TraceInfo(deviceId, $"Fallback notify failed for {ch.Uuid}: {ex.Message}");
+                            }
                         }
                         if (!_writableCharacteristics.ContainsKey(deviceId) &&
                             (ch.Properties.HasFlag(GattCharacteristicProperties.Write) ||
