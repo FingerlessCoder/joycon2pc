@@ -25,6 +25,12 @@ namespace Joycon2PC.Core
     /// <c>previous=2, target=0 -> Math.Round(-0.44)=0</c> trap) and it is also the
     /// disease a naive integer EMA would reintroduce.
     ///
+    /// The trap is a property of the <em>truncation</em>, not of any particular
+    /// alpha: the current 63/100 traps just as hard on a residual of 1, since
+    /// <c>(1 * 63) / 100 == 0</c> too. Any numerator/denominator pair has some
+    /// residual that rounds to zero, which is precisely why the accumulator below
+    /// is load-bearing and must not be "simplified" away.
+    ///
     /// The fix is to carry the division remainder into the next step:
     ///
     ///     d     = (target - state) * alphaNum + rem
@@ -64,11 +70,61 @@ namespace Joycon2PC.Core
     /// Every entry into band 3 from band 1 or band 2 sets the state to the target
     /// directly (<c>state = target; rem = 0</c>) instead of ramping up from the
     /// stale zero. That is deliberate: a stick pushed just past EnterRadius has a
-    /// target of only a few thousand counts, and ramping from zero at 7/20 per
-    /// step makes it visibly creep out of the centre for a dozen milliseconds
+    /// target of only a few thousand counts, and ramping from zero at the low-pass
+    /// alpha per step makes it visibly creep out of the centre for a sample or two
     /// ("stick lags when you nudge it"). Re-seeding on every entry also stops the
     /// emitted value from jumping when the stick leaves band 2 again, since the
     /// held output can be far away from the target at that point.
+    ///
+    /// SAMPLE RATE (why alpha is 63/100 and not 7/20)
+    /// -------------------------------------------------
+    /// A one-pole low-pass is only meaningful relative to the rate its input
+    /// actually changes. Two facts pin that rate here:
+    ///
+    ///   1. The hardware only reports at ~16.7 Hz. A measured BLE capture gave
+    ///      an input interval p95/p99 = 60.0/60.1 ms, i.e. T = 60 ms exactly.
+    ///   2. The output pump ticks at 120 Hz, but ViGEmBridge.UpdateFromState
+    ///      now gates on change (ControllerReportGate.HasChanged) and returns
+    ///      before touching these filters when the merged state is unchanged.
+    ///      So a sample that reaches the filter is a *fresh* one; duplicates
+    ///      never arrive. The filter therefore runs at 16.7 Hz, not 120 Hz.
+    ///
+    /// Derivation of the default alpha:
+    ///
+    ///   Target: a time constant of tau = 60 ms = one input sample period, i.e.
+    ///   a group delay strictly below one sample. That is the most smoothing a
+    ///   causal filter can do while never adding more latency than the input
+    ///   path already carries, and it is the reason for the choice rather than
+    ///   "7/20 felt OK". Matching the discrete pole to the continuous decay:
+    ///
+    ///       alpha = 1 - exp(-T / tau)
+    ///             = 1 - exp(-60 / 60)
+    ///             = 1 - e^-1
+    ///             = 1 - 0.367879
+    ///             = 0.632121
+    ///
+    ///   Stored as the reduced fraction 63/100 (63/100 = 0.63, within 0.34% of
+    ///   e^-1). A coarse fraction is safe here precisely because the error-
+    ///   feedback accumulator carries the discarded remainder, so alpha does
+    ///   not have to be finely quantised for the filter to converge.
+    ///
+    /// Sanity numbers for this alpha at T = 60 ms:
+    ///   - cutoff fc = -ln(1-alpha) / (2*pi*T) = 0.9943/0.37699 = 2.64 Hz,
+    ///     i.e. under fs/4, which is the highest cutoff a 16.7 Hz input can
+    ///     actually represent;
+    ///   - exact discrete ramp lag = T*(1-alpha)/alpha = 60*0.37/0.63 = 35.2 ms
+    ///     = 0.59 samples (sub-sample, as intended);
+    ///   - 95% settled after 3 samples = 180 ms.
+    ///
+    /// What the old 7/20 did at this rate, and why it was wrong here:
+    ///   fc = 1.14 Hz and a ramp lag of 60*(13/20)/(7/20) = 111 ms, i.e. 1.86
+    ///   sample periods of extra lag on top of the input path. Worse, 7/20 was
+    ///   tuned for a 120 Hz filter that was actually being fed 7 identical
+    ///   targets per input sample, which is what produced the decaying 120 Hz
+    ///   ripple on the output (see the repeated-target note in
+    ///   Filter). With duplicates no longer fed in, 63/100 is both smooth
+    ///   enough and, if a duplicate ever did arrive, self-limiting: seven
+    ///   repeats of one target leave (1-alpha)^7 = 0.095% of the step behind.
     ///
     /// AT REST
     /// -------
@@ -84,11 +140,30 @@ namespace Joycon2PC.Core
     /// </summary>
     public sealed class StickFilter
     {
-        // Alpha as a reduced fraction. 7/20 == 0.35: low enough to kill visible
-        // jitter at ~120 Hz, high enough that a deliberate flick still arrives in
-        // a handful of samples instead of feeling like syrup.
-        public const int DefaultAlphaNum = 7;
-        public const int DefaultAlphaDen = 20;
+        // Alpha as a reduced fraction: 63/100 == 0.63 ~= 1 - e^-1 == 0.632121.
+        //
+        // DERIVATION (see the SAMPLE RATE block in the class summary for the
+        // full argument): the Joy-Con 2 BLE link reports at a measured
+        // ~16.7 Hz (input interval p95/p99 = 60.0/60.1 ms, so T = 60 ms), and
+        // ViGEmBridge gates UpdateFromState on change, so this filter is fed at
+        // the report rate rather than the 120 Hz pump rate. Targeting a time
+        // constant of tau = 60 ms -- one input sample, so the added group delay
+        // stays sub-sample -- gives
+        //
+        //     alpha = 1 - exp(-T / tau) = 1 - exp(-1) = 0.632121
+        //
+        // rounded to 63/100. Equivalently: keep the filter's cutoff below
+        // fs/4 = 4.2 Hz, because a 16.7 Hz input cannot represent more than
+        // that anyway, and take the largest alpha whose pole still leaves the
+        // ramp lag below one sample period (60*0.37/0.63 = 35 ms).
+        //
+        // The old value was 7/20 == 0.35, chosen for a 120 Hz filter. At the
+        // real 16.7 Hz that is fc = 1.14 Hz with 111 ms (1.86 samples) of
+        // added lag, and -- because the pump used to hand it seven identical
+        // targets per input sample -- it emitted a decaying 120 Hz ripple of
+        // its own on top of the 16.7 Hz signal. Do not "restore 7/20".
+        public const int DefaultAlphaNum = 63;
+        public const int DefaultAlphaDen = 100;
 
         // 6000 == 18.3% of full scale. Deliberately the same value as
         // Joycon2PC.ViGEm.ViGEmBridge.AxisOutputDeadzone so the gate that decides
@@ -199,8 +274,8 @@ namespace Joycon2PC.Core
                     // Activation from "at rest / frozen": re-seed straight onto the
                     // target instead of ramping up from a stale zero. A stick pushed
                     // just past EnterRadius has a target of only a few thousand
-                    // counts, and ramping from zero at 7/20 per step makes it
-                    // visibly creep out of the centre for a dozen milliseconds.
+                    // counts, and ramping from zero at the low-pass alpha per step
+                    // makes it visibly creep out of the centre for a sample or two.
                     // Re-seeding is a one-sample step on a movement the user has
                     // only just started.
                     _x = targetX;

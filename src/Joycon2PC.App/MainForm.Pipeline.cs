@@ -108,8 +108,24 @@ namespace Joycon2PC.App
 
                 if (state != null)
                 {
+                    // Latest merged state, kept for diagnostics/debugging. It is
+                    // NOT the dedup baseline: MergeDeviceStates allocates a fresh
+                    // JoyconState every tick, so this field can only ever be
+                    // compared by value anyway, and the gate that decides what
+                    // reaches the virtual controller lives in
+                    // Joycon2PC.ViGEm.ViGEmBridge.UpdateFromState
+                    // (ControllerReportGate.HasChanged), next to the code that
+                    // writes it.
                     _lastState = state;
+                    // The pump ticks at OUTPUT_PUMP_HZ (120) but the Joy-Con 2
+                    // only reports at ~16.7 Hz (measured interval p95/p99 =
+                    // 60.0/60.1 ms), so UpdateFromState is a no-op on the ~7 of
+                    // every 8 ticks that carry nothing new.
                     try { _bridge?.UpdateFromState(state, leftDeviceId, rightDeviceId); } catch { }
+                    // Deliberately NOT gated on change: this path already
+                    // coalesces to at most one BeginInvoke in flight and always
+                    // renders the newest state, so re-posting an identical
+                    // snapshot costs one lock and one Interlocked and no GDI.
                     RequestInputDisplayRefresh(state);
                 }
 

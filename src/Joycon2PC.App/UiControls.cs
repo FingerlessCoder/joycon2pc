@@ -735,6 +735,14 @@ namespace Joycon2PC.App
         private Form? _popup;
         private int _hoverIndex = -1;
 
+        // ------ focus hand-off bookkeeping (see RestoreOwnerFocus) ------
+        /// <summary>Monotonic token: a newer close supersedes an older in-flight restore.</summary>
+        private int _restoreGeneration;
+        /// <summary>When the most recent activation was issued, for the bounded retry.</summary>
+        private long _activateAttemptTick;
+        /// <summary>How long after a first activation a retry is even considered, so two can never race.</summary>
+        private const int ActivateRetryDelayMs = 150;
+
         public ThemedDropDown()
         {
             _items = new ItemCollection(this);
@@ -953,9 +961,15 @@ namespace Joycon2PC.App
         /// <summary>
         /// The popup is a real top-level window, so showing it made it the foreground window.
         /// Hiding a foreground window leaves the process owning no foreground window at all, and
-        /// Control.Focus() cannot create one - that is why the main window used to stay inactive
-        /// with a greyed title bar until the user clicked it. Put the owner back explicitly.
-        /// Activation is asynchronous, so the focus hand-off is retried on the next pump turn.
+        /// Control.Focus() cannot create one - which is why the main window used to stay inactive
+        /// with a greyed title bar until the user clicked it.
+        ///
+        /// Form.Activate() is animated by the shell, so it must be issued sparingly: calling it
+        /// while a previous activation is still animating makes the window flash. Therefore the
+        /// activation happens at most once per close, never while the popup is still up, and
+        /// only when the owner is genuinely not the active window. The deferred callback exists
+        /// for the focus hand-off (activation is asynchronous, so an immediate Focus() can be
+        /// lost), not to fire a second activation.
         /// </summary>
         private void RestoreOwnerFocus()
         {
@@ -963,47 +977,73 @@ namespace Joycon2PC.App
             if (owner == null || owner.IsDisposed || !owner.IsHandleCreated)
                 return;
 
-            try
-            {
-                owner.Activate();
-            }
-            catch
-            {
-                // Best effort - the queued hand-off below retries.
-            }
+            // Never activate the owner out from under a popup that is still on screen.
+            if (_popup is { Visible: true })
+                return;
+
+            int generation = ++_restoreGeneration;
+
+            if (!IsActive(owner))
+                TryActivate(owner);
 
             try
             {
                 if (IsDisposed || !IsHandleCreated)
                     return;
 
-                BeginInvoke(() =>
-                {
-                    try
-                    {
-                        if (IsDisposed || IsDropDownOpen)
-                            return;
-
-                        // If the user has since moved to a different window, leave them alone.
-                        Form? active = Form.ActiveForm;
-                        if (active != null && !ReferenceEquals(active, owner))
-                            return;
-
-                        if (!ReferenceEquals(Form.ActiveForm, owner))
-                            owner.Activate();
-
-                        if (!ContainsFocus)
-                            Focus();
-                    }
-                    catch
-                    {
-                        // A focus hand-off must never break the close path.
-                    }
-                });
+                BeginInvoke(() => FinishRestoreOwnerFocus(owner, generation));
             }
             catch
             {
-                // BeginInvoke can fail while the form is tearing down; Activate already ran.
+                // BeginInvoke can fail while the form is tearing down; the activation above already ran.
+            }
+        }
+
+        /// <summary>
+        /// Runs on the next pump turn, after the activation has had a chance to land.
+        /// </summary>
+        private void FinishRestoreOwnerFocus(Form owner, int generation)
+        {
+            try
+            {
+                if (IsDisposed || IsDropDownOpen)
+                    return;
+
+                // A newer close supersedes this one: never let a stale callback activate.
+                if (generation != _restoreGeneration)
+                    return;
+
+                // Never fight the user - if some other window took the foreground, leave it alone.
+                Form? active = Form.ActiveForm;
+                if (active != null && !ReferenceEquals(active, owner))
+                    return;
+
+                // The single activation may genuinely have failed (foreground lock). Retry only
+                // after the first one's animation window has passed, so the two can never race.
+                if (!IsActive(owner) && Environment.TickCount64 - _activateAttemptTick >= ActivateRetryDelayMs)
+                    TryActivate(owner);
+
+                if (!ContainsFocus)
+                    Focus();
+            }
+            catch
+            {
+                // A focus hand-off must never break the close path.
+            }
+        }
+
+        private static bool IsActive(Form owner) => ReferenceEquals(Form.ActiveForm, owner);
+
+        private void TryActivate(Form owner)
+        {
+            _activateAttemptTick = Environment.TickCount64;
+            try
+            {
+                owner.Activate();
+            }
+            catch
+            {
+                // Best effort only.
             }
         }
 

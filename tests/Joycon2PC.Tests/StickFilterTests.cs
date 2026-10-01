@@ -5,13 +5,26 @@ namespace Joycon2PC.Tests;
 
 public class StickFilterTests
 {
+    // The measured reality this suite is written against: the Joy-Con 2 BLE link
+    // delivers a fresh input report every 60 ms (measured p95/p99 interval
+    // 60.0/60.1 ms => ~16.7 Hz). The 120 Hz output pump used to hand the filter
+    // seven identical targets per fresh sample; ViGEmBridge now gates
+    // UpdateFromState on change, so a sample that reaches the filter is fresh.
+    // All sample counts below are therefore "16.7 Hz samples", i.e. 60 ms apart.
+    private const int ReportIntervalMs = 60;
+
     // A filter with the deadzone collapsed to 0, so the low-pass accumulator itself
     // is what is under test: "at rest" then only means "target is exactly 0".
+    // Uses the production alpha so these tests track the real tuning instead of
+    // silently drifting away from it (the naive-EMA demonstration below keeps its
+    // own historical 7/20 on purpose -- see its comment).
     private static StickFilter RawFilter()
-        => new(enterRadius: 0, exitRadius: 0, alphaNum: 7, alphaDen: 20);
+        => new(enterRadius: 0, exitRadius: 0,
+               alphaNum: StickFilter.DefaultAlphaNum, alphaDen: StickFilter.DefaultAlphaDen);
 
     private static StickFilter DeadzoneFilter()
-        => new(enterRadius: 6000, exitRadius: 3300, alphaNum: 7, alphaDen: 20);
+        => new(enterRadius: 6000, exitRadius: 3300,
+               alphaNum: StickFilter.DefaultAlphaNum, alphaDen: StickFilter.DefaultAlphaDen);
 
     // ─────────────────────────────────────────────────────────────────────────
     //  NO STICKING -- regression for the reverted smoothing attempt
@@ -28,6 +41,11 @@ public class StickFilterTests
         //    (reverted) smoothing attempt had the same shape, via
         //    Math.Round(-0.44) == 0.
         // 2. The error-feedback form used by StickFilter converges exactly.
+        //
+        // 7/20 is kept here ON PURPOSE even though the production alpha is now
+        // 63/100: it is the alpha the reverted attempt actually shipped, and the
+        // point is that the trap is caused by the truncation, not by the tuning --
+        // 63/100 traps identically on a residual of 1 ((1*63)/100 == 0).
         const int AlphaNum = 7;
         const int AlphaDen = 20;
 
@@ -275,9 +293,43 @@ public class StickFilterTests
         var filter = new StickFilter();
         Assert.Equal(StickFilter.DefaultEnterRadius, filter.EnterRadius);
         Assert.Equal(StickFilter.DefaultExitRadius, filter.ExitRadius);
-        Assert.Equal(7, filter.AlphaNum);
-        Assert.Equal(20, filter.AlphaDen);
+        Assert.Equal(StickFilter.DefaultAlphaNum, filter.AlphaNum);
+        Assert.Equal(StickFilter.DefaultAlphaDen, filter.AlphaDen);
         Assert.False(filter.IsDeflected);
+    }
+
+    [Fact]
+    public void Filter_DefaultAlpha_IsTheRetuned16_7HzValue()
+    {
+        // UPDATED (was: Assert.Equal(7, ...) / Assert.Equal(20, ...)).
+        // This test did encode the old constant, and it encoded it deliberately
+        // -- pinning the tuning so nobody could quietly retune the feel without
+        // updating a test. The value is now pinned again, with the derivation it
+        // is supposed to satisfy:
+        //
+        //   T  = 60 ms   (measured BLE input interval, ~16.7 Hz)
+        //   tau = 60 ms  (target time constant = one input sample, so the added
+        //                  group delay stays sub-sample)
+        //   alpha = 1 - exp(-T/tau) = 1 - e^-1 = 0.632121  ->  stored as 63/100
+        //
+        // 63/100 = 0.63 is 0.34% off the exact pole; the error-feedback
+        // accumulator is what makes a coarse fraction acceptable here.
+        Assert.Equal(63, StickFilter.DefaultAlphaNum);
+        Assert.Equal(100, StickFilter.DefaultAlphaDen);
+
+        double alpha = (double)StickFilter.DefaultAlphaNum / StickFilter.DefaultAlphaDen;
+        double target = 1.0 - Math.Exp(-1.0);
+        Assert.True(Math.Abs(alpha - target) < 0.005, $"alpha {alpha} is not within 0.005 of 1 - e^-1 = {target}");
+
+        // Cutoff must stay under fs/4 -- a 16.7 Hz input cannot represent more,
+        // and anything above that is just extra lag bought with no extra fidelity.
+        double cutoffHz = -Math.Log(1.0 - alpha) / (2.0 * Math.PI * (ReportIntervalMs / 1000.0));
+        Assert.True(cutoffHz < (1000.0 / ReportIntervalMs) / 4.0, $"cutoff {cutoffHz:F2} Hz is too high for the sample rate");
+
+        // And the whole point of the retune: the added ramp lag is sub-sample.
+        // The old 7/20 gave 1.86 samples here.
+        double rampLagSamples = (1.0 - alpha) / alpha;
+        Assert.True(rampLagSamples < 1.0, $"ramp lag {rampLagSamples:F2} samples is not sub-sample");
     }
 
     [Fact]
@@ -290,6 +342,185 @@ public class StickFilterTests
 
         Assert.False(filter.IsDeflected);
         Assert.Equal(0, filter.Filter(0, 0).X);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  RETUNED ALPHA -- the filter is a 16.7 Hz filter, not a 120 Hz one
+    // ─────────────────────────────────────────────────────────────────────────
+    //
+    // Everything in this section feeds the filter at the measured BLE report
+    // interval (60 ms => ~16.7 Hz), which is what ViGEmBridge's change gate now
+    // guarantees: a sample that gets through the gate is a genuinely fresh one.
+
+    /// <summary>
+    /// Puts a RawFilter into the deflected band with its state exactly at
+    /// <paramref name="seed"/>, so the next samples exercise the low-pass itself
+    /// rather than the re-seed-on-activation shortcut.
+    /// </summary>
+    private static StickFilter DeflectedAt(int seedX, int seedY = 0)
+    {
+        var filter = RawFilter();
+        var out0 = filter.Filter(seedX, seedY);
+        Assert.Equal(seedX, out0.X); // band 3 re-seed lands on the target
+        return filter;
+    }
+
+    [Fact]
+    public void Filter_RetunedAlpha_SettlesWithinThreeSamples_OfAStepAt16_7Hz()
+    {
+        // 5000 -> 30000 is a near-full-scale jump (both ends inside the signed-16
+        // domain, which is what the filter clamps to). alpha = 63/100 closes
+        // 1 - 0.37^3 = 94.9% of it inside 3 samples = 180 ms at the measured 60 ms
+        // interval. The bound below is 6% rather than 5% because 0.37^3 = 5.07%
+        // lands marginally on the wrong side of an exact 95% claim.
+        const int From = 5000;
+        const int To = 30000;
+        var filter = DeflectedAt(From);
+
+        var outputs = new List<int> { From };
+        for (int i = 0; i < 3; i++) outputs.Add(filter.Filter(To, 0).X);
+
+        int after3 = outputs[^1];
+        double errorPercent = 100.0 * Math.Abs(To - after3) / Math.Abs(To - From);
+        Assert.True(errorPercent < 6.0,
+            $"after 3 samples ({3 * ReportIntervalMs} ms) still {errorPercent:F2}% away: {after3}");
+
+        // Monotone approach, never past the target.
+        for (int i = 1; i < outputs.Count; i++)
+        {
+            Assert.True(outputs[i] > outputs[i - 1], $"not increasing at index {i}: {outputs[i - 1]} -> {outputs[i]}");
+            Assert.True(outputs[i] <= To, $"overshot the target at index {i}: {outputs[i]} > {To}");
+        }
+    }
+
+    [Fact]
+    public void Filter_RetunedAlpha_SettlesWithinFiveSamples_AndThenLandsExactly()
+    {
+        // The other half of "the settled response is correct at the actual rate":
+        // it must actually arrive, not merely approach. 1 - 0.37^5 = 99.31%.
+        // Error feedback then guarantees exact convergence, so 100 samples is far
+        // more than enough.
+        const int From = 5000;
+        const int To = 30000;
+        var filter = DeflectedAt(From);
+
+        int x = From;
+        for (int i = 0; i < 5; i++) x = filter.Filter(To, 0).X;
+
+        double errorPercent = 100.0 * Math.Abs(To - x) / Math.Abs(To - From);
+        Assert.True(errorPercent < 1.0,
+            $"after 5 samples ({5 * ReportIntervalMs} ms) still {errorPercent:F2}% away: {x}");
+
+        for (int i = 0; i < 100; i++) x = filter.Filter(To, 0).X;
+        Assert.Equal(To, x);
+    }
+
+    [Fact]
+    public void Filter_RetunedAlpha_StepInputNeverOvershoots()
+    {
+        // A one-pole cannot overshoot on its own, but the integer accumulator and
+        // the carried remainder are where an overshoot would actually be
+        // introduced. Sweep both step directions on both axes.
+        var steps = new[]
+        {
+            (From: 32767,  To: -32768),
+            (From: -32768, To: 32767),
+            (From: 20000,  To: -20000),
+            (From: 30000,  To: -30000),
+            (From: 1,      To: 30000),
+        };
+
+        foreach (var (From, To) in steps)
+        {
+            var filter = DeflectedAt(From, From);
+            int low = Math.Min(From, To);
+            int high = Math.Max(From, To);
+
+            for (int i = 0; i < 200; i++)
+            {
+                var out0 = filter.Filter(To, To);
+                Assert.InRange(out0.X, low, high);
+                Assert.InRange(out0.Y, low, high);
+            }
+
+            // ...and it still arrives exactly.
+            Assert.Equal(To, filter.Filter(To, To).X);
+            Assert.Equal(To, filter.Filter(To, To).Y);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  REGRESSION GUARD -- a repeated identical target is a no-op
+    // ─────────────────────────────────────────────────────────────────────────
+    //
+    // This is what makes the change gate safe to put *in front of* the filter.
+    // If the pump ever does hand the filter the same target twice, the filter must
+    // not invent motion: it may only close the remaining gap toward the target,
+    // never oscillate, and once it has landed it must be bit-stable.
+
+    [Fact]
+    public void Filter_RepeatedIdenticalTarget_ConvergesMonotonicallyAndThenIsBitStable()
+    {
+        const int From = 5000;
+        const int To = 30000;
+        var filter = DeflectedAt(From);
+
+        var outputs = new List<int>();
+        for (int i = 0; i < 400; i++) outputs.Add(filter.Filter(To, 0).X);
+
+        // Converging phase: strictly increasing towards the target and never past
+        // it. This is the assertion that rules out the old 120 Hz ripple, which was
+        // non-monotonic across the seven repeats of a single input sample.
+        for (int i = 1; i < outputs.Count; i++)
+        {
+            Assert.True(outputs[i] >= outputs[i - 1],
+                $"output went backwards at repeat {i}: {outputs[i - 1]} -> {outputs[i]}");
+            Assert.True(outputs[i] <= To, $"overshot the target at repeat {i}: {outputs[i]} > {To}");
+        }
+
+        Assert.Equal(To, outputs[^1]);
+
+        // Settled phase: once it has landed, more identical samples change nothing.
+        int settled = outputs[^1];
+        for (int i = 0; i < 100; i++)
+            Assert.Equal(settled, filter.Filter(To, 0).X);
+    }
+
+    [Fact]
+    public void Filter_RepeatedIdenticalTarget_LeavesAlmostNoResidualAfterSevenRepeats()
+    {
+        // The exact regression for the ripple defect. The old pump handed the
+        // filter seven identical targets per fresh input sample, so this is the
+        // shape the filter has to survive. Residual after seven repeats of one
+        // target is (1 - alpha)^7 of the step.
+        //
+        //   alpha = 63/100 -> 0.37^7 = 0.095%   (negligible)
+        //   alpha =  7/20  -> 0.65^7 = 4.90%   (the ripple that was measured)
+        //
+        // Asserted as a comparison against a filter built with the old constant, so
+        // the "before" number is produced by the same code path rather than by a
+        // comment nobody can check.
+        const int From = 5000;
+        const int To = 30000;
+        const double Step = To - From;
+
+        int ResidualAfterSevenRepeats(int alphaNum, int alphaDen)
+        {
+            var filter = new StickFilter(enterRadius: 0, exitRadius: 0, alphaNum, alphaDen);
+            Assert.Equal(From, filter.Filter(From, 0).X); // re-seed into the deflected band
+            int x = From;
+            for (int i = 0; i < 7; i++) x = filter.Filter(To, 0).X;
+            return To - x;
+        }
+
+        int retuned = ResidualAfterSevenRepeats(StickFilter.DefaultAlphaNum, StickFilter.DefaultAlphaDen);
+        int legacy = ResidualAfterSevenRepeats(alphaNum: 7, alphaDen: 20);
+
+        Assert.True(100.0 * retuned / Step < 0.2,
+            $"retuned residual after 7 repeats is {retuned} counts ({100.0 * retuned / Step:F3}% of the step), expected < 0.2%");
+        Assert.True(100.0 * legacy / Step > 4.0,
+            $"legacy 7/20 residual is only {legacy} counts ({100.0 * legacy / Step:F3}%); if this fails the 'old alpha' side of the comparison is no longer representative");
+        Assert.True(retuned * 20 < legacy, "retuned residual should be far smaller than the legacy one");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

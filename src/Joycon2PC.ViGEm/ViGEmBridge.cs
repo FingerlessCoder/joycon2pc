@@ -18,11 +18,112 @@ namespace Joycon2PC.ViGEm
     //   LStick click → LS   RStick click → RS
     //   D-Pad Up/Down/Left/Right → D-Pad
     //   C   → Right Thumb (extra Joy-Con 2 R button)
+    /// <summary>
+    /// Pure predicate: "would writing <paramref name="next"/> to the virtual
+    /// controller actually change anything the game can observe?"
+    ///
+    /// WHY THIS EXISTS
+    /// ---------------
+    /// The output pump ticks at 120 Hz but the Joy-Con 2 BLE link only delivers a
+    /// fresh input report every ~60 ms (measured p95/p99 interval 60.0/60.1 ms,
+    /// i.e. ~16.7 Hz). The pump used to call <see cref="ViGEmBridge.UpdateFromState"/>
+    /// unconditionally on every tick, and UpdateFromState ended in an unconditional
+    /// SubmitReport, so the game received 7.2 byte-identical reports per fresh
+    /// sample. That is pure waste on the submit path, and it fed seven identical
+    /// targets into the StickFilter low-pass per input sample, which made the
+    /// filter emit a decaying 120 Hz ripple of its own on top of the 16.7 Hz
+    /// signal (the filter advances 0.65, 0.42, 0.27, ... of the residual across
+    /// those seven steps). Gating on change removes both problems at once.
+    ///
+    /// WHAT COUNTS AS "CHANGED"
+    /// ------------------------
+    /// Every field of <see cref="JoyconState"/> reaches the controller, so all five
+    /// are compared: the four stick axes (they become LeftThumb/RightThumb via
+    /// calibration → filter → deadzone remap) and the 32-bit button word (which
+    /// covers the analogue triggers, the shoulders, the D-pad, everything). If a
+    /// future field is added to JoyconState it must be added here too -- this is
+    /// the single place that decides whether the controller gets written.
+    ///
+    /// COMPARISON IS BY VALUE, NEVER BY REFERENCE
+    /// -----------------------------------------
+    /// MergeDeviceStates allocates a fresh JoyconState on every pump tick, so
+    /// reference equality is *always* false. A reference-based gate would look
+    /// like it compiled fine and would silently disable the whole optimisation
+    /// (every tick would submit). JoyconState is also a mutable class, so a
+    /// caller that mutated an instance in place must still be detected -- hence
+    /// value comparison in both directions.
+    ///
+    /// THREADING
+    /// ---------
+    /// Pure and static: no instance state, no locks, safe from any thread. It
+    /// deliberately lives outside ViGEmBridge and mentions no ViGEm type so unit
+    /// tests can exercise it without loading Nefarius.ViGEm.Client / ViGEmBus.dll.
+    /// </summary>
+    public static class ControllerReportGate
+    {
+        /// <summary>
+        /// True when <paramref name="next"/> must be submitted, i.e. when there is
+        /// no previously submitted state or it differs in any field that reaches
+        /// the controller.
+        /// </summary>
+        public static bool HasChanged(JoyconState? previouslySubmitted, JoyconState next)
+        {
+            ArgumentNullException.ThrowIfNull(next);
+
+            // Nothing submitted yet (fresh connect, or just after Dispose): the
+            // controller has never seen any state, so the first sample must go out.
+            if (previouslySubmitted == null) return true;
+
+            return previouslySubmitted.Buttons     != next.Buttons
+                || previouslySubmitted.LeftStickX   != next.LeftStickX
+                || previouslySubmitted.LeftStickY   != next.LeftStickY
+                || previouslySubmitted.RightStickX  != next.RightStickX
+                || previouslySubmitted.RightStickY  != next.RightStickY;
+        }
+
+        /// <summary>
+        /// Field-for-field copy, used to snapshot the baseline. The gate must not
+        /// alias the caller's object: JoyconState is mutable, and the merged state
+        /// is also handed to RequestInputDisplayRefresh, so a retained reference
+        /// could be mutated out from under the baseline.
+        /// </summary>
+        public static JoyconState Copy(JoyconState source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+
+            return new JoyconState
+            {
+                Buttons     = source.Buttons,
+                LeftStickX  = source.LeftStickX,
+                LeftStickY  = source.LeftStickY,
+                RightStickX = source.RightStickX,
+                RightStickY = source.RightStickY,
+            };
+        }
+    }
+
     public class ViGEmBridge : IDisposable
     {
         private ViGEmClient? _client;
         private IXbox360Controller? _controller;
         private bool _connected = false;
+
+        // ── Change gate baseline ─────────────────────────────────────────────────
+        // The last state that was actually written to the virtual controller, as a
+        // private snapshot (ControllerReportGate.Copy). Null means "nothing has been
+        // submitted yet", which is the correct initial state and also the correct
+        // state after Connect/Dispose.
+        //
+        // This lives here rather than in the App pump because the knowledge of
+        // *what reaches the controller* belongs next to the code that writes it;
+        // MainForm.OutputPumpLoopAsync cannot know that, for instance, that two
+        // different button words can map to the same shoulder state.
+        //
+        // THREADING: written only from UpdateFromState, which has exactly one
+        // caller -- the 120 Hz output pump (MainForm.OutputPumpLoopAsync). Same
+        // confinement as the StickFilter fields below, so no lock is needed. Do
+        // not add a second caller without adding synchronisation.
+        private JoyconState? _lastSubmittedState;
 
         // ── Stick conditioning ──────────────────────────────────────────────────
         // Per-device asymmetric normalisation (raw 12-bit -> signed-16 XInput),
@@ -80,6 +181,10 @@ namespace Joycon2PC.ViGEm
                 };
                 _controller.Connect();
                 _connected = true;
+                // A new virtual controller has never seen any state, so drop the
+                // gate baseline: the first pump tick after a (re)connect must
+                // submit even if the merged state matches the pre-disconnect one.
+                _lastSubmittedState = null;
                 Console.WriteLine("[ViGEmBridge] Virtual Xbox 360 controller connected.");
             }
             catch (Exception ex)
@@ -92,8 +197,16 @@ namespace Joycon2PC.ViGEm
         /// <summary>
         /// Writes one merged state to the virtual controller.
         ///
-        /// Thread confinement: the StickFilter instances this touches are lock-free,
-        /// so every call must come from the output pump thread.
+        /// Does nothing at all when the merged state is field-for-field identical
+        /// to the last one actually submitted: see <see cref="ControllerReportGate"/>
+        /// for why the pump rate and the report rate disagree, and why the gate is
+        /// checked *before* the filters run (so the low-pass only ever sees fresh
+        /// samples, and cannot manufacture a 120 Hz ripple out of a 16.7 Hz
+        /// signal).
+        ///
+        /// Thread confinement: the StickFilter instances and the
+        /// _lastSubmittedState baseline this touches are lock-free, so every call
+        /// must come from the output pump thread.
         /// </summary>
         /// <param name="state">Merged Joy-Con state for this tick.</param>
         /// <param name="leftDeviceId">Device id that owns the left stick, for calibration lookup; null uses factory defaults.</param>
@@ -105,6 +218,14 @@ namespace Joycon2PC.ViGEm
                 Console.WriteLine($"[ViGEmBridge] (no device) LX={state.LeftStickX} LY={state.LeftStickY}");
                 return;
             }
+
+            // ── Change gate ──────────────────────────────────────────────────────
+            // 120 Hz pump, ~16.7 Hz reports: without this the game receives 7.2
+            // identical reports per fresh sample. Compared by value, never by
+            // reference (MergeDeviceStates allocates a new JoyconState every tick,
+            // so a reference compare would never suppress anything).
+            if (!ControllerReportGate.HasChanged(_lastSubmittedState, state))
+                return;
 
             try
             {
@@ -118,9 +239,12 @@ namespace Joycon2PC.ViGEm
                 // covered by tests/Joycon2PC.Tests/StickFilterTests.cs.
                 //
                 // No integer EMA is used anywhere on this path: an un-remaindered
-                // integer EMA sticks (state += (target-state)*7/20 rounds to 0 for
-                // small residuals), which is what made the earlier smoothing attempt
-                // get reverted. StickFilter carries the division remainder instead.
+                // integer EMA sticks (state += (target-state)*num/den rounds to 0
+                // for small residuals), which is what made the earlier smoothing
+                // attempt get reverted. StickFilter carries the division remainder
+                // instead. Its alpha (63/100) is tuned for the ~16.7 Hz report rate
+                // and only makes sense because the change gate above stops the pump
+                // from feeding this filter duplicate targets.
                 var left = _leftStickFilter.Filter(
                     _calibration.Normalize(leftDeviceId, StickAxis.LeftX, state.LeftStickX),
                     _calibration.Normalize(leftDeviceId, StickAxis.LeftY, state.LeftStickY));
@@ -168,6 +292,11 @@ namespace Joycon2PC.ViGEm
                 c.SetButtonState(Xbox360Button.Right, state.IsPressed(SW2Button.Right));
 
                 c.SubmitReport();
+
+                // Baseline is recorded only after a successful submit, so a
+                // transient SubmitReport failure is retried on the next tick
+                // instead of being swallowed as "already up to date".
+                _lastSubmittedState = ControllerReportGate.Copy(state);
             }
             catch (Exception ex)
             {
@@ -190,6 +319,9 @@ namespace Joycon2PC.ViGEm
                 (_controller as IDisposable)?.Dispose();
                 _client?.Dispose();
                 _connected = false;
+                // Nothing is submitted to a disposed controller, so the baseline
+                // must not survive into a later Connect().
+                _lastSubmittedState = null;
             }
             catch { }
         }
