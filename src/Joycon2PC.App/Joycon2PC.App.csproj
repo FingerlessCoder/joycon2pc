@@ -12,6 +12,25 @@
     <DefineConstants Condition="'$(EnableInTheHand)' == 'true'">$(DefineConstants);INTHEHAND</DefineConstants>
   </PropertyGroup>
 
+  <!-- Application-level defaults. These drive the generated ApplicationConfiguration class
+       that Program.Main calls, and they are the first half of the Per-Monitor-V2 story;
+       app.manifest is the second half. Both are needed (issue #16). -->
+  <PropertyGroup>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+    <!-- MainForm does its own scaling against DeviceDpi, so WinForms' own Dpi auto-resize
+         must stay off or every control would be scaled twice. -->
+    <EnableWindowsFormsHighDpiAutoResizing>false</EnableWindowsFormsHighDpiAutoResizing>
+    <!-- WFO0003 asks us to drop the DPI block from app.manifest and rely on the managed API
+         alone. We keep both on purpose: the manifest is the only thing that is guaranteed to be
+         applied before the first window is created, and ApplicationHighDpiMode is the fallback
+         for hosts that strip the manifest. Both declare the same PerMonitorV2 mode. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
   <!-- EnableShiny controls whether the optional Shiny.BluetoothLE package is referenced.
        Set /p:EnableShiny=true when building to add the package and compile the BLEAK code path. -->
   <PropertyGroup>

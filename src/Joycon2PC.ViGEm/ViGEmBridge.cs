@@ -24,16 +24,35 @@ namespace Joycon2PC.ViGEm
         private IXbox360Controller? _controller;
         private bool _connected = false;
 
-        // NS2 factory calibration defaults (from NS2-Connect.py / BetterJoy-NS2)
-        // Raw 12-bit value range: min=746, centre=1998, max=3249
-        private const int NS2_CENTRE = 1998;
-        private const int NS2_RANGE  = 3249 - 746;   // ≈ 2503 counts each side (asymmetric)
+        // ── Stick conditioning ──────────────────────────────────────────────────
+        // Per-device asymmetric normalisation (raw 12-bit -> signed-16 XInput),
+        // persisted as %APPDATA%\Joycon2PC\calibration.json. The NS2 factory
+        // defaults live on AxisCalibration (centre 1998, min 746, max 3249) and
+        // replace the old hardcoded NS2_CENTRE / NS2_RANGE constants.
+        private readonly StickCalibration _calibration = new();
+
+        // One filter per physical stick. Radial deadzone (enter/exit hysteresis)
+        // + error-feedback low-pass, both in the signed-16 output domain.
+        //
+        // THREADING: these are deliberately lock-free and thread-confined to the
+        // output pump thread. Every UpdateFromState call must originate there
+        // (see Joycon2PC.App.MainForm.OutputPumpLoopAsync).
+        private readonly StickFilter _leftStickFilter = new();
+        private readonly StickFilter _rightStickFilter = new();
+
+        /// <summary>Live calibration profiles; a UI can drive Begin/Record/EndCapture on this.</summary>
+        public StickCalibration Calibration => _calibration;
 
         // Deadzone applied in Xbox signed-short space (-32768..32767).
         // 6000 ≈ 18.3 % of full range — covers NS2 drift at rest and factory off-centre offsets.
         // Remainder is rescaled so full deflection still reaches ±32767.
+        //
+        // DO NOT remove, rename, repurpose or change the meaning of this constant:
+        // JoyConVisualizerPanel reads it and re-derives the identical remap curve
+        // so the on-screen stick dot never disagrees with the emulated output.
+        // StickFilter.DefaultEnterRadius is deliberately the same value so the
+        // filter's deflected gate and this rescale start at the same point.
         public const short AxisOutputDeadzone = 6000;
-        private const short AXIS_OUTPUT_DEADZONE = AxisOutputDeadzone;
 
         /// <summary>
         /// Fired when the game/OS sends a rumble command to the virtual Xbox controller.
@@ -48,6 +67,10 @@ namespace Joycon2PC.ViGEm
         {
             try
             {
+                // Best-effort: a missing / malformed calibration.json just leaves
+                // the NS2 factory defaults in place.
+                _calibration.Load();
+
                 _client = new ViGEmClient();
                 _controller = _client.CreateXbox360Controller();
                 _controller.AutoSubmitReport = false; // batch all changes then submit once
@@ -66,7 +89,16 @@ namespace Joycon2PC.ViGEm
             }
         }
 
-        public void UpdateFromState(JoyconState state)
+        /// <summary>
+        /// Writes one merged state to the virtual controller.
+        ///
+        /// Thread confinement: the StickFilter instances this touches are lock-free,
+        /// so every call must come from the output pump thread.
+        /// </summary>
+        /// <param name="state">Merged Joy-Con state for this tick.</param>
+        /// <param name="leftDeviceId">Device id that owns the left stick, for calibration lookup; null uses factory defaults.</param>
+        /// <param name="rightDeviceId">Device id that owns the right stick, for calibration lookup; null uses factory defaults.</param>
+        public void UpdateFromState(JoyconState state, string? leftDeviceId = null, string? rightDeviceId = null)
         {
             if (!_connected || _controller == null)
             {
@@ -79,13 +111,27 @@ namespace Joycon2PC.ViGEm
                 var c = _controller;
 
                 // ── Axes ─────────────────────────────────────────────────────────────
-                // Map 12-bit NS2 stick → signed short → deadzone. No smoothing filter:
-                // exponential smoothing had a rounding-trap near zero (previous=2, target=0
-                // → Math.Round(-0.44)=0 → output stuck at 2 forever) which caused RS jitter.
-                c.SetAxisValue(Xbox360Axis.LeftThumbX,  ApplyDeadzone(MapStick(state.LeftStickX)));
-                c.SetAxisValue(Xbox360Axis.LeftThumbY,  ApplyDeadzone(MapStick(state.LeftStickY)));
-                c.SetAxisValue(Xbox360Axis.RightThumbX, ApplyDeadzone(MapStick(state.RightStickX)));
-                c.SetAxisValue(Xbox360Axis.RightThumbY, ApplyDeadzone(MapStick(state.RightStickY)));
+                // Pipeline: per-device asymmetric calibration normalise (12-bit ->
+                // signed-16 XInput) → StickFilter (radial deadzone with
+                // enter/exit hysteresis + error-feedback low-pass) → output
+                // deadzone rescale. All three stages live in Joycon2PC.Core and are
+                // covered by tests/Joycon2PC.Tests/StickFilterTests.cs.
+                //
+                // No integer EMA is used anywhere on this path: an un-remaindered
+                // integer EMA sticks (state += (target-state)*7/20 rounds to 0 for
+                // small residuals), which is what made the earlier smoothing attempt
+                // get reverted. StickFilter carries the division remainder instead.
+                var left = _leftStickFilter.Filter(
+                    _calibration.Normalize(leftDeviceId, StickAxis.LeftX, state.LeftStickX),
+                    _calibration.Normalize(leftDeviceId, StickAxis.LeftY, state.LeftStickY));
+                var right = _rightStickFilter.Filter(
+                    _calibration.Normalize(rightDeviceId, StickAxis.RightX, state.RightStickX),
+                    _calibration.Normalize(rightDeviceId, StickAxis.RightY, state.RightStickY));
+
+                c.SetAxisValue(Xbox360Axis.LeftThumbX,  StickFilter.RemapPastDeadzone(left.X, AxisOutputDeadzone));
+                c.SetAxisValue(Xbox360Axis.LeftThumbY,  StickFilter.RemapPastDeadzone(left.Y, AxisOutputDeadzone));
+                c.SetAxisValue(Xbox360Axis.RightThumbX, StickFilter.RemapPastDeadzone(right.X, AxisOutputDeadzone));
+                c.SetAxisValue(Xbox360Axis.RightThumbY, StickFilter.RemapPastDeadzone(right.Y, AxisOutputDeadzone));
 
                 // ZL / ZR → analogue triggers (0 or 255)
                 c.SetSliderValue(Xbox360Slider.LeftTrigger,  state.IsPressed(SW2Button.ZL) ? (byte)255 : (byte)0);
@@ -129,48 +175,12 @@ namespace Joycon2PC.ViGEm
             }
         }
 
-        // Map NS2 12-bit stick value (0..4095, centre ≈ 1998) to signed short.
-        // v == 0 means no data received yet — treat as centre.
-        private static short MapStick(int v)
-        {
-            if (v == 0) return 0; // no data → output centre (0 in Xbox signed space)
-
-            // Centre-relative, scaled so that max deviation → ±32767
-            int centered = v - NS2_CENTRE;
-
-            // Use asymmetric half-ranges matching factory calibration
-            int halfRange = centered >= 0
-                ? (3249 - NS2_CENTRE)   // positive half: 1251 counts to max
-                : (NS2_CENTRE - 746);   // negative half: 1252 counts to min
-
-            if (halfRange == 0) return 0;
-            int scaled = centered * 32767 / halfRange;
-            if (scaled > short.MaxValue) scaled = short.MaxValue;
-            if (scaled < short.MinValue) scaled = short.MinValue;
-            return (short)scaled;
-        }
-
-        private static short ApplyDeadzone(short value)
-        {
-            int abs = Math.Abs(value);
-            if (abs <= AXIS_OUTPUT_DEADZONE)
-                return 0;
-
-            int sign = value < 0 ? -1 : 1;
-            int maxMagnitude = short.MaxValue;
-            int range = maxMagnitude - AXIS_OUTPUT_DEADZONE;
-
-            double normalized = (abs - AXIS_OUTPUT_DEADZONE) / (double)range;
-            int rescaled = (int)Math.Round(normalized * maxMagnitude);
-            return ClampToShort(sign * rescaled);
-        }
-
-        private static short ClampToShort(int value)
-        {
-            if (value > short.MaxValue) return short.MaxValue;
-            if (value < short.MinValue) return short.MinValue;
-            return (short)value;
-        }
+        // MapStick / ApplyDeadzone / ClampToShort used to live here. They had zero
+        // test coverage and their logic is now split across two tested Core types:
+        //   raw 12-bit -> signed-16 XInput : StickCalibration.AxisCalibration.Normalize
+        //   deadzone hysteresis + low-pass : StickFilter.Filter
+        //   output deadzone rescale        : StickFilter.RemapPastDeadzone
+        // Keeping copies here would only give the pipeline two sources of truth.
 
         public void Dispose()
         {

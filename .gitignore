@@ -34,4 +34,7 @@ desktop.ini
 # Ignore VS Code workspace file
 joycon2.code-workspace
 
+# Kilo local workspace copy of this repo
+.kilo/
+
 /joycon2cpp-main

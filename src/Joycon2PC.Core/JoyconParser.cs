@@ -2,27 +2,20 @@ using System;
 
 namespace Joycon2PC.Core
 {
-    // High-level parsed state for a single Joy-Con 2 (Switch 2 / NS2)
-    public class JoyconState
-    {
-        // 32-bit button word from report bytes [4..7] (little-endian).
-        // See SW2Button enum for individual bit definitions.
-        public uint Buttons { get; set; }
-
-        // 12-bit stick values (0..4095, factory centre ≈ 1998)
-        public int LeftStickX  { get; set; }
-        public int LeftStickY  { get; set; }
-        public int RightStickX { get; set; }
-        public int RightStickY { get; set; }
-
-        // Convenience: test a single button.
-        public bool IsPressed(SW2Button btn) => (Buttons & (uint)btn) != 0;
-    }
-
+    // ============================================================================================
+    //  DEAD CODE — scheduled for removal. See the note at the bottom of this file.
+    // ============================================================================================
+    //
     // Parser for Joy-Con 2 (Switch 2 / NS2) BLE notification reports.
     //
     // NS2 custom GATT service: ab7de9be-89fe-49ad-828f-118f09df7fd0
     // Input notification characteristic: ab7de9be-89fe-49ad-828f-118f09df7fd2
+    //
+    // There is NO call site for Parse() anywhere in the repository. The live decode
+    // path is NS2InputReportDecoder.TryDecode (Core) called from
+    // MainForm.RawReportReceived (App). Everything here is therefore unreachable;
+    // it is kept only because MainForm still declares/initialises a JoyconParser
+    // field and subscribes to its StateChanged event.
     //
     // Notification payload layout (InTheHand GATT delivers raw ATT notification value):
     //   [0]      = 0xA1  — BLE HID-over-GATT "Input Report" ATT opcode prefix
@@ -45,7 +38,8 @@ namespace Joycon2PC.Core
 
         public JoyconParser() { }
 
-        // Entry point: called with raw characteristic notification bytes.
+        // Entry point: called from raw characteristic notification bytes.
+        // No caller exists — see the class comment above.
         public void Parse(byte[] report)
         {
             if (report == null || report.Length < 8)
@@ -109,4 +103,22 @@ namespace Joycon2PC.Core
             StateChanged?.Invoke(state);
         }
     }
+
+    // --------------------------------------------------------------------------------------------
+    //  REMOVAL NOTE
+    //
+    //  To delete this file, remove these five lines (they live in files owned by another lane):
+    //
+    //    src/Joycon2PC.App/MainForm.cs:115    private JoyconParser _parser = new();
+    //    src/Joycon2PC.App/MainForm.cs:233    _parser.StateChanged += OnStateChanged;
+    //    src/Joycon2PC.App/MainForm.Options.cs:357  _parser.StateChanged -= OnStateChanged;
+    //    src/Joycon2PC.App/MainForm.Options.cs:358  _parser = new JoyconParser();
+    //    src/Joycon2PC.App/MainForm.Options.cs:359  _parser.StateChanged += OnStateChanged;
+    //
+    //  and then remove the OnStateChanged handler at
+    //    src/Joycon2PC.App/MainForm.Pipeline.cs:1608
+    //
+    //  No other file references JoyconParser, StateChanged or Parse. JoyconState (used by live
+    //  code) has been moved to its own file, JoyconState.cs, so it survives this deletion.
+    // --------------------------------------------------------------------------------------------
 }
