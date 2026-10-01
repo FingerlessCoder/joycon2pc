@@ -232,13 +232,37 @@ namespace Joycon2PC.App
         // ======================================================================================================================================
         //  VIGEM CHECK
         // ======================================================================================================================================
+        // WHY THE BRIDGE EVENTS EXIST
+        // ---------------------------
+        // ViGEmBridge.Connect() never throws: it catches everything internally. It used
+        // to report the reason with Console.WriteLine, which is a no-op here because
+        // Joycon2PC.App is OutputType=WinExe and has no console attached. So on a
+        // machine with no ViGEmBus the app reported nothing at all -- and worse, the
+        // old code below set the status card to a green "Driver found and ready"
+        // purely because Connect() had returned, which it does even when it failed.
+        // It now asks the bridge, and everything user-visible is driven from the two
+        // event handlers.
+        private bool _vigemFailureReported;
+
         private async Task CheckViGEmAsync()
         {
             await Task.Delay(200); // let window paint first
             try
             {
-                _bridge = new Joycon2PC.ViGEm.ViGEmBridge();
-                _bridge.Connect();
+                var bridge = new Joycon2PC.ViGEm.ViGEmBridge();
+                // Subscribe before Connect(): the failure is raised from inside it.
+                bridge.ConnectionFailed += OnViGEmConnectionFailed;
+                bridge.UpdateFailed     += OnViGEmUpdateFailed;
+                _bridge = bridge;
+
+                bridge.Connect();
+
+                // Connect() returning is not success -- it returns void and swallows
+                // the exception. Without this check the card would claim "ready" on a
+                // machine with no driver at all. The failure handler has already run
+                // by this point, so just leave its red state alone.
+                if (!bridge.IsConnected)
+                    return;
 
                 Invoke(() =>
                 {
@@ -248,18 +272,64 @@ namespace Joycon2PC.App
                     Log("ViGEmBus driver found. Virtual Xbox 360 controller is ready.", GREEN);
                 });
             }
-            catch
+            catch (Exception ex)
             {
-                Invoke(() =>
-                {
-                    _lblVigemStatus.Text      = "ViGEmBus not installed";
-                    _lblVigemStatus.ForeColor = RED;
-                    _cardVigem.Invalidate();
-                    Log("ViGEmBus driver not found! Install it from:", RED);
-                    Log("  https://github.com/nefarius/ViGEmBus/releases", ACCENT);
-                    Log("Virtual controller will not appear in Windows without ViGEmBus.", YELLOW);
-                });
+                // Defensive: Connect() is written to swallow its own exceptions, so
+                // in practice this only guards a disposed form or a driver that fails
+                // outside the bridge's own try.
+                OnViGEmConnectionFailed(ex.Message);
             }
+        }
+
+        /// <summary>
+        /// The virtual controller could not be created. Carries the driver exception
+        /// text verbatim into the log, because that text is the actionable part: it
+        /// distinguishes "ViGEmBus is not installed" from "the device is disabled in
+        /// Device Manager", and both look identical from the outside otherwise.
+        /// Raised on the check thread; marshals to the UI thread.
+        /// </summary>
+        private void OnViGEmConnectionFailed(string reason)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(() => OnViGEmConnectionFailed(reason));
+                return;
+            }
+            if (IsDisposed || Disposing || !IsHandleCreated || _vigemFailureReported)
+                return;
+            _vigemFailureReported = true;
+
+            _lblVigemStatus.Text      = "ViGEmBus not installed";
+            _lblVigemStatus.ForeColor = RED;
+            _cardVigem.Invalidate();
+            Log("ViGEmBus driver not found! Install it from:", RED);
+            Log("  https://github.com/nefarius/ViGEmBus/releases", ACCENT);
+            Log("Virtual controller will not appear in Windows without ViGEmBus.", YELLOW);
+            Log($"Driver reported: {reason}", RED);
+        }
+
+        /// <summary>
+        /// A live virtual controller started rejecting reports -- the bus survived the
+        /// startup check but went away (driver disabled, device removed, game exited
+        /// the exclusive session). Throttled to ~1 line per 10 s on the bridge side,
+        /// because the caller here is the 120 Hz output pump. Yellow rather than red:
+        /// the driver is present, the link is broken.
+        /// </summary>
+        private void OnViGEmUpdateFailed(string reason)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(() => OnViGEmUpdateFailed(reason));
+                return;
+            }
+            if (IsDisposed || Disposing || !IsHandleCreated)
+                return;
+
+            _lblVigemStatus.Text      = "Controller link lost";
+            _lblVigemStatus.ForeColor = YELLOW;
+            _cardVigem.Invalidate();
+            Log($"Virtual controller stopped accepting reports: {reason}", YELLOW);
+            Log("Reinstall or re-enable ViGEmBus in Device Manager, then restart Joycon2PC.", TXT_DIM);
         }
 
         // ======================================================================================================================================

@@ -141,6 +141,24 @@ namespace Joycon2PC.ViGEm
         private readonly StickFilter _leftStickFilter = new();
         private readonly StickFilter _rightStickFilter = new();
 
+        // ── Failure reporting ──────────────────────────────────────────────────
+        // Connect() and UpdateFromState() both swallow their exceptions, so a
+        // failure is invisible to the caller: Connect() returns void with no status
+        // and UpdateFromState() returns void too. That used to be fine because the
+        // bridge reported the reason with Console.WriteLine -- except
+        // Joycon2PC.App is OutputType=WinExe, so it has no console attached and
+        // every one of those lines was written to nowhere. A first-time user with
+        // no ViGEmBus installed got a silent no-op. ConnectionFailed / UpdateFailed
+        // below are the channel that actually reaches a human.
+        //
+        // THREADING: both events are raised synchronously on the thread that hits
+        // the failure -- ConnectionFailed on whatever thread called Connect(),
+        // UpdateFailed on the 120 Hz output pump. Subscribers that touch UI must
+        // marshal themselves.
+        private static readonly TimeSpan UPDATE_FAILURE_NOTIFY_INTERVAL = TimeSpan.FromSeconds(10);
+        private DateTime _lastUpdateFailureUtc = DateTime.MinValue;
+        private string? _lastUpdateFailureMessage;
+
         /// <summary>Live calibration profiles; a UI can drive Begin/Record/EndCapture on this.</summary>
         public StickCalibration Calibration => _calibration;
 
@@ -161,6 +179,45 @@ namespace Joycon2PC.ViGEm
         /// Subscribe to this to forward haptic feedback to the physical Joy-Con 2.
         /// </summary>
         public event Action<byte, byte>? RumbleReceived;
+
+        /// <summary>
+        /// Fired when <see cref="Connect"/> could not attach to ViGEmBus.
+        /// Parameter: the driver/OS exception message, e.g. "ViGEmBus is not
+        /// installed" or "Access is denied". This is the only place a subscriber
+        /// can learn *why* the virtual controller is missing, and for a first-time
+        /// user it is the difference between an actionable next step and an app
+        /// that looks broken. It may fire more than once if Connect() is retried.
+        ///
+        /// Raised synchronously on the calling thread inside Connect()'s catch, so
+        /// it fires before Connect() returns -- check <see cref="IsConnected"/>
+        /// after calling Connect() rather than assuming a return means success.
+        /// </summary>
+        public event Action<string>? ConnectionFailed;
+
+        /// <summary>
+        /// Fired when a live virtual controller rejects a report (SubmitReport,
+        /// SetAxisValue, ...). Parameter: the exception message.
+        ///
+        /// Throttled on the bridge side: at most one notification per
+        /// <see cref="UPDATE_FAILURE_NOTIFY_INTERVAL"/>, and only when the message
+        /// changes, because the output pump can fail up to 120 times a second and an
+        /// unthrottled event would bury the user-visible log. A successful submit
+        /// clears the throttle so the next distinct failure is reported at once.
+        /// </summary>
+        public event Action<string>? UpdateFailed;
+
+        /// <summary>
+        /// True when a virtual controller is attached and reports are being
+        /// accepted. <see cref="Connect"/> does not throw, so this -- not the mere
+        /// fact that Connect() returned -- is the success test.
+        /// </summary>
+        public bool IsConnected => _connected;
+
+        /// <summary>
+        /// Message from the most recent <see cref="ConnectionFailed"/>, or null if
+        /// Connect() has not failed since the last successful Connect().
+        /// </summary>
+        public string? LastError { get; private set; }
 
         public ViGEmBridge() { }
 
@@ -185,12 +242,18 @@ namespace Joycon2PC.ViGEm
                 // gate baseline: the first pump tick after a (re)connect must
                 // submit even if the merged state matches the pre-disconnect one.
                 _lastSubmittedState = null;
+                LastError = null;
                 Console.WriteLine("[ViGEmBridge] Virtual Xbox 360 controller connected.");
             }
             catch (Exception ex)
             {
+                // Kept for a developer running under a debugger (Console.WriteLine
+                // is a no-op under OutputType=WinExe, which is why the event below
+                // exists at all).
                 Console.WriteLine($"[ViGEmBridge] Connect failed: {ex.Message}");
                 _connected = false;
+                LastError = ex.Message;
+                ConnectionFailed?.Invoke(ex.Message);
             }
         }
 
@@ -215,6 +278,13 @@ namespace Joycon2PC.ViGEm
         {
             if (!_connected || _controller == null)
             {
+                // Deliberately NOT raised as ConnectionFailed/UpdateFailed: the
+                // pump starts before the 200 ms driver check has necessarily
+                // finished, so "no device yet" is the normal startup state and this
+                // line fires at 120 Hz until Connect() lands. The real reason we
+                // have no device is reported exactly once, by Connect()'s catch.
+                // If Connect() succeeded and the device vanished later, _connected
+                // stays true and the failure surfaces through the catch below.
                 Console.WriteLine($"[ViGEmBridge] (no device) LX={state.LeftStickX} LY={state.LeftStickY}");
                 return;
             }
@@ -297,11 +367,40 @@ namespace Joycon2PC.ViGEm
                 // transient SubmitReport failure is retried on the next tick
                 // instead of being swallowed as "already up to date".
                 _lastSubmittedState = ControllerReportGate.Copy(state);
+
+                // The link is healthy again: drop the throttle so a later failure
+                // is reported immediately instead of waiting out the window.
+                _lastUpdateFailureUtc = DateTime.MinValue;
+                _lastUpdateFailureMessage = null;
             }
             catch (Exception ex)
             {
+                // Kept for a developer running under a debugger; the event below is
+                // what a real user sees.
                 Console.WriteLine($"[ViGEmBridge] Update failed: {ex.Message}");
+                RaiseUpdateFailed(ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Throttled fan-out for <see cref="UpdateFailed"/>. See the field comment
+        /// on UPDATE_FAILURE_NOTIFY_INTERVAL for why this cannot just invoke the
+        /// event on every failure: UpdateFromState runs on the 120 Hz output pump.
+        ///
+        /// Thread confinement: pump thread only, same as the StickFilter fields
+        /// and _lastSubmittedState, so no lock is needed.
+        /// </summary>
+        private void RaiseUpdateFailed(string message)
+        {
+            if (string.Equals(message, _lastUpdateFailureMessage, StringComparison.Ordinal))
+            {
+                if ((DateTime.UtcNow - _lastUpdateFailureUtc) < UPDATE_FAILURE_NOTIFY_INTERVAL)
+                    return;
+            }
+
+            _lastUpdateFailureUtc = DateTime.UtcNow;
+            _lastUpdateFailureMessage = message;
+            UpdateFailed?.Invoke(message);
         }
 
         // MapStick / ApplyDeadzone / ClampToShort used to live here. They had zero

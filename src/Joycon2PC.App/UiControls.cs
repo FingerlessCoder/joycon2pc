@@ -735,13 +735,16 @@ namespace Joycon2PC.App
         private Form? _popup;
         private int _hoverIndex = -1;
 
-        // ------ focus hand-off bookkeeping (see RestoreOwnerFocus) ------
-        /// <summary>Monotonic token: a newer close supersedes an older in-flight restore.</summary>
-        private int _restoreGeneration;
-        /// <summary>When the most recent activation was issued, for the bounded retry.</summary>
-        private long _activateAttemptTick;
-        /// <summary>How long after a first activation a retry is even considered, so two can never race.</summary>
-        private const int ActivateRetryDelayMs = 150;
+        // ------ popup bookkeeping ------
+        /// <summary>
+        /// The field whose popup is on screen, so a second one closes the first. That used to
+        /// happen by itself: showing a second popup activated it, and activating one deactivated
+        /// the other. A non-activating popup never fires Deactivate, so the rule is now explicit.
+        /// </summary>
+        private static ThemedDropDown? _openDropDown;
+        /// <summary>Window we borrowed to learn about clicks outside the popup, and the watcher.</summary>
+        private Form? _popupOwner;
+        private IMessageFilter? _outsideClickWatch;
 
         public ThemedDropDown()
         {
@@ -922,12 +925,29 @@ namespace Joycon2PC.App
             _hoverPreview = true;
             _hoverIndex = _selectedIndex;
 
+            if (_openDropDown is { } other && !ReferenceEquals(other, this))
+                other.CloseDropDown();
+
             var owner = FindForm();
             if (owner != null && owner != _popup)
                 _popup.Owner = owner;
 
+            // The field, not the popup, owns the keyboard for the whole open cycle. This is a
+            // plain same-thread Focus() - no activation, nothing animated - and it is issued
+            // before the popup is up, so there is no focus to take away from anything.
+            Focus();
+
             _popup.Show();
-            list.Focus();
+
+            _openDropDown = this;
+            if (owner != null)
+            {
+                _popupOwner = owner;
+                owner.Deactivate += OnOwnerDeactivate;
+            }
+            _outsideClickWatch = new OutsideClickWatch(this, _popup);
+            Application.AddMessageFilter(_outsideClickWatch);
+
             Invalidate();
             DropDownVisibilityChanged?.Invoke(this, EventArgs.Empty);
         }
@@ -937,115 +957,46 @@ namespace Joycon2PC.App
             if (!IsDropDownOpen)
                 return;
 
-            var popup = _popup!;
             _hoverPreview = false;
             _hoverIndex = -1;
 
-            // Only the paths where the popup is still the foreground window owe focus back:
-            // item click, Escape/Enter and keyboard select. When we arrive via
-            // popup.Deactivate, whatever the user clicked has already taken focus and
-            // stealing it back would yank the caret out from under them.
-            // WM_KILLFOCUS is delivered before WM_ACTIVATE(WA_INACTIVE), so ContainsFocus is
-            // already false on the deactivate path and both tests below correctly say no.
-            bool giveFocusBack = ReferenceEquals(Form.ActiveForm, popup) || popup.ContainsFocus;
+            _popup!.Hide();
+            DetachPopupHooks();
 
-            popup.Hide();
-
-            if (giveFocusBack)
-                RestoreOwnerFocus();
+            // Nothing is handed back, and that is the whole point of the popup's ex-style. It is
+            // non-activating, so it never took the keyboard from the field and never took the
+            // foreground from the window that owns it: the process keeps a foreground window for
+            // the entire open/close cycle. There is therefore nothing to restore, and the
+            // animated Form.Activate() that used to flicker the window on every close - the only
+            // way to recreate foreground once it is gone - is not reachable from here at all.
+            // Focus is also never stolen: if the user moved it somewhere else, the owner
+            // deactivate and focus-leave paths close the list and leave focus where it went.
 
             Invalidate();
             DropDownVisibilityChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        /// <summary>
-        /// The popup is a real top-level window, so showing it made it the foreground window.
-        /// Hiding a foreground window leaves the process owning no foreground window at all, and
-        /// Control.Focus() cannot create one - which is why the main window used to stay inactive
-        /// with a greyed title bar until the user clicked it.
-        ///
-        /// Form.Activate() is animated by the shell, so it must be issued sparingly: calling it
-        /// while a previous activation is still animating makes the window flash. Therefore the
-        /// activation happens at most once per close, never while the popup is still up, and
-        /// only when the owner is genuinely not the active window. The deferred callback exists
-        /// for the focus hand-off (activation is asynchronous, so an immediate Focus() can be
-        /// lost), not to fire a second activation.
-        /// </summary>
-        private void RestoreOwnerFocus()
+        private void DetachPopupHooks()
         {
-            var owner = FindForm();
-            if (owner == null || owner.IsDisposed || !owner.IsHandleCreated)
-                return;
-
-            // Never activate the owner out from under a popup that is still on screen.
-            if (_popup is { Visible: true })
-                return;
-
-            int generation = ++_restoreGeneration;
-
-            if (!IsActive(owner))
-                TryActivate(owner);
-
-            try
+            if (_outsideClickWatch != null)
             {
-                if (IsDisposed || !IsHandleCreated)
-                    return;
-
-                BeginInvoke(() => FinishRestoreOwnerFocus(owner, generation));
+                Application.RemoveMessageFilter(_outsideClickWatch);
+                _outsideClickWatch = null;
             }
-            catch
+            if (_popupOwner != null)
             {
-                // BeginInvoke can fail while the form is tearing down; the activation above already ran.
+                _popupOwner.Deactivate -= OnOwnerDeactivate;
+                _popupOwner = null;
             }
+            if (ReferenceEquals(_openDropDown, this))
+                _openDropDown = null;
         }
 
         /// <summary>
-        /// Runs on the next pump turn, after the activation has had a chance to land.
+        /// The user put the foreground somewhere else, so the list is stranded behind whatever
+        /// they clicked. Close it and restore nothing - the focus they chose wins.
         /// </summary>
-        private void FinishRestoreOwnerFocus(Form owner, int generation)
-        {
-            try
-            {
-                if (IsDisposed || IsDropDownOpen)
-                    return;
-
-                // A newer close supersedes this one: never let a stale callback activate.
-                if (generation != _restoreGeneration)
-                    return;
-
-                // Never fight the user - if some other window took the foreground, leave it alone.
-                Form? active = Form.ActiveForm;
-                if (active != null && !ReferenceEquals(active, owner))
-                    return;
-
-                // The single activation may genuinely have failed (foreground lock). Retry only
-                // after the first one's animation window has passed, so the two can never race.
-                if (!IsActive(owner) && Environment.TickCount64 - _activateAttemptTick >= ActivateRetryDelayMs)
-                    TryActivate(owner);
-
-                if (!ContainsFocus)
-                    Focus();
-            }
-            catch
-            {
-                // A focus hand-off must never break the close path.
-            }
-        }
-
-        private static bool IsActive(Form owner) => ReferenceEquals(Form.ActiveForm, owner);
-
-        private void TryActivate(Form owner)
-        {
-            _activateAttemptTick = Environment.TickCount64;
-            try
-            {
-                owner.Activate();
-            }
-            catch
-            {
-                // Best effort only.
-            }
-        }
+        private void OnOwnerDeactivate(object? sender, EventArgs e) => CloseDropDown();
 
         private Form CreatePopup()
         {
@@ -1068,9 +1019,8 @@ namespace Joycon2PC.App
             var host = new Panel { Dock = DockStyle.Fill, BackColor = T.Line, Padding = new Padding(1) };
             host.Controls.Add(list);
 
-            var form = new Form
+            var form = new DropDownPopup
             {
-                FormBorderStyle = FormBorderStyle.None,
                 ShowInTaskbar = false,
                 StartPosition = FormStartPosition.Manual,
                 BackColor = T.Line,
@@ -1080,12 +1030,114 @@ namespace Joycon2PC.App
             };
             form.Controls.Add(host);
             form.Tag = list;
-            form.Deactivate += (s, e) => CloseDropDown();
             form.FormClosing += (s, e) =>
             {
                 if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; CloseDropDown(); }
             };
             return form;
+        }
+
+        /// <summary>
+        /// The drop-down popup: a real top-level window, but one that never owns the foreground.
+        ///
+        /// It has to be a top-level window to escape the owning form's client area, and that used
+        /// to be the entire cause of the flicker on close. Show() activates a normal top-level
+        /// window, so showing the popup took the foreground from the main window, and hiding it
+        /// again left the process owning no foreground window at all. The only thing that can
+        /// recreate foreground is Form.Activate(), and the shell animates that - so every close
+        /// flashed the window, no matter how rarely it was called.
+        ///
+        /// WS_EX_NOACTIVATE removes the cause instead of the symptom: the popup is shown and
+        /// clicked without ever touching the foreground, so there is never a foreground window to
+        /// lose and nothing has to be activated back. The field keeps the keyboard throughout,
+        /// which is why HandleDropDownKey drives the list from the field's own OnKeyDown.
+        /// </summary>
+        private sealed class DropDownPopup : Form
+        {
+            private const int WsExNoActivate = 0x08000000;
+            private const int WmMouseActivate = 0x0021;
+            private const int MaNoActivate = 3;   // WinUser.h: do not activate, keep the click
+
+            public DropDownPopup() => FormBorderStyle = FormBorderStyle.None;
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    var cp = base.CreateParams;
+                    cp.ExStyle |= WsExNoActivate;
+                    return cp;
+                }
+            }
+
+            protected override void WndProc(ref Message m)
+            {
+                // WS_EX_NOACTIVATE already stops a click from activating this window, so this is
+                // the same promise made explicitly at the message level rather than inherited:
+                // no activation, and (MA_NOACTIVATE, not ...ANDEAT) the click is not discarded, so
+                // it still lands on the list. The field has to stay the keyboard for the whole
+                // open cycle, and any click path that took focus into the popup would trip the
+                // field's focus-leave close before the mouse-up that commits the item.
+                if (m.Msg == WmMouseActivate)
+                {
+                    m.Result = (IntPtr)MaNoActivate;
+                    return;
+                }
+                base.WndProc(ref m);
+            }
+        }
+
+        /// <summary>
+        /// Watches the app for clicks outside the popup, for as long as the popup is up. This is
+        /// what popup.Deactivate used to do: with the old activating popup, clicking anywhere else
+        /// deactivated it and the list closed. A non-activating popup is never activated, so that
+        /// signal no longer exists and has to be produced directly.
+        ///
+        /// The message is only ever observed, never swallowed - the click still lands exactly
+        /// where the user aimed, and the list closes underneath it.
+        /// </summary>
+        private sealed class OutsideClickWatch : IMessageFilter
+        {
+            private const int WmLButtonDown = 0x0201;
+            private const int WmRButtonDown = 0x0204;
+            private const int WmMButtonDown = 0x0207;
+            private const int WmNcLButtonDown = 0x00A1;
+            private const int WmNcRButtonDown = 0x00A4;
+            private const int WmNcMButtonDown = 0x00A7;
+
+            private readonly ThemedDropDown _dropDown;
+            private readonly Form _popup;
+
+            public OutsideClickWatch(ThemedDropDown dropDown, Form popup)
+            {
+                _dropDown = dropDown;
+                _popup = popup;
+            }
+
+            public bool PreFilterMessage(ref Message m)
+            {
+                try
+                {
+                    if (!IsMouseDown(m.Msg) || !_popup.IsHandleCreated)
+                        return false;   // false = pass the message on, always
+
+                    // The cursor decides, not the handle: a click on the owning window's title bar
+                    // or on a surface that takes no focus is still a click outside the list.
+                    if (_popup.RectangleToScreen(_popup.ClientRectangle).Contains(Cursor.Position))
+                        return false;
+
+                    _dropDown.CloseDropDown();
+                }
+                catch
+                {
+                    // A filter runs inside the message loop: it must never throw out of here.
+                }
+                return false;
+            }
+
+            private static bool IsMouseDown(int msg) => msg
+                is WmLButtonDown or WmRButtonDown or WmMButtonDown
+                   or WmNcLButtonDown or WmNcRButtonDown or WmNcMButtonDown;
         }
 
         private void RefreshList()
@@ -1107,6 +1159,7 @@ namespace Joycon2PC.App
         {
             if (disposing)
             {
+                DetachPopupHooks();
                 _popup?.Dispose();
                 _popup = null;
             }
@@ -1134,8 +1187,8 @@ namespace Joycon2PC.App
         {
             if (IsDropDownOpen && e.KeyCode is Keys.Up or Keys.Down or Keys.Enter or Keys.Space or Keys.Escape)
             {
-                // the open list normally owns the keyboard; this is the safety net for the
-                // moment focus has not landed on it yet
+                // The popup is non-activating and never takes the keyboard, so the field is the
+                // only window that can deliver these - this is the live path, not a safety net.
                 HandleDropDownKey(e.KeyCode, e);
                 return;
             }
@@ -1180,7 +1233,21 @@ namespace Joycon2PC.App
         }
 
         protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
-        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            Invalidate();
+
+            // The field is the keyboard for as long as the list is up, so losing it means the
+            // user moved on - Tab to the next control, or a click somewhere else in the app.
+            // Close rather than win focus back: yanking the caret out from under a deliberate
+            // Tab or click is worse than an open list. The single case left open is a list that
+            // holds the focus itself, which should not be reachable (the popup is
+            // non-activating) but is harmless to leave to its own key forwarding.
+            if (IsDropDownOpen && !(_popup?.ContainsFocus ?? false))
+                CloseDropDown();
+        }
 
         // ------------------------------------------------------------------ paint
 
@@ -1362,7 +1429,9 @@ namespace Joycon2PC.App
             protected override void OnMouseDown(MouseEventArgs e)
             {
                 base.OnMouseDown(e);
-                Focus();
+                // No Focus() here on purpose. The popup is a non-activating, pointer-only window:
+                // taking the keyboard would pull it off the field, and a field that lost focus
+                // closes the list - so the click would never reach OnMouseUp to commit.
                 if (e.Button == MouseButtons.Left)
                     HoverIndex = RowAt(e.Location);
             }
@@ -1388,7 +1457,11 @@ namespace Joycon2PC.App
             protected override void OnKeyDown(KeyEventArgs e)
             {
                 base.OnKeyDown(e);
-                // one source of truth: the field owns the semantics, the list just forwards
+                // one source of truth: the field owns the semantics, the list just forwards.
+                // Normally the field holds the keyboard and drives the list from its own
+                // OnKeyDown, because the popup is not allowed to take focus. This forwarder is
+                // what keeps a list that was handed focus anyway (an assistive tool, say) from
+                // turning the arrow keys into a dead end.
                 DropDown?.HandleDropDownKey(e.KeyCode, e);
             }
 
@@ -1428,9 +1501,12 @@ namespace Joycon2PC.App
                     y += ItemHeight;
                 }
 
-                if (Focused)
+                // The list is not focusable - the keyboard lives on the field - so the ring
+                // follows the field while the list is open. Without it the open list would look
+                // inert, which is exactly the wrong thing to signal.
+                if (Focused || (DropDown?.Focused ?? false))
                 {
-                    var ring = new RectangleF(0.5f, 0.5f, w - 1f, Math.Max(0, ClientSize.Height - 1f));
+                    var ring = new RectangleF(0.5f, 0.5f, w - 1f, Math.Max(0f, ClientSize.Height - 1f));
                     Ink.Outline(g, ring, _metrics.Radius(UiTheme.RadiusField), Ink.Alpha(T.Accent, 110), 1f);
                 }
             }
