@@ -27,13 +27,12 @@ namespace Joycon2PC.Core
     ///     raw &lt;  Center :  (Center - raw) / (Center - Min) * 32767
     ///
     /// The <em>idea</em> (per-axis asymmetric normalisation) comes from
-    /// TheFrano/joycon2cpp. Its implementation is not copied: joycon2cpp
-    /// snapshots a single frame as centre, which bakes that frame's noise into
-    /// the middle of the deadzone, and it computes
-    /// <c>centered * 32767 / halfRange</c> in 32-bit int with truncation, giving
-    /// ~26-count quantisation steps at the ends of the travel and hard zeros near
-    /// centre. Here the numerator is 64-bit and rounded, and centre only comes
-    /// from a caller-declared rest frame.
+    /// TheFrano/joycon2cpp. Its implementation is not copied: the scale here is a
+    /// 64-bit numerator with round-half-up on the magnitude rather than a
+    /// truncating integer divide, and centre only ever comes from a
+    /// caller-declared rest frame (or, on the capture path, from that rest frame
+    /// plus the observed extrema) -- so resting noise is never baked into the
+    /// middle of the deadzone.
     /// </summary>
     public readonly struct AxisCalibration
     {

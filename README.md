@@ -48,11 +48,11 @@ If you want desktop cursor control, enable **Mouse mode (MVP)** in Quick Control
 - [x] Shoulder buttons: L, R, ZL (trigger), ZR (trigger)
 - [x] D-Pad (Up, Down, Left, Right)
 - [x] Menu buttons: +, -, Home, Capture
-- [x] Left stick + Right stick (12-bit precision, factory calibration)
+- [x] Left stick + Right stick (12-bit precision, per-axis asymmetric normalisation)
 - [x] Stick click (L3, R3)
 - [x] C button (new Joy-Con 2 R exclusive)
 - [x] Grip buttons (GripLeft, GripRight — new on Joy-Con 2)
-- [x] SL / SR buttons (per-side rail buttons — bits parsed)
+- [x] SL / SR buttons (per-side rail buttons — forwarded as LB / RB, OR-ed with the L / R shoulder bit)
 - [x] L/R auto-detection from Windows device name (`Joy-Con 2 (L)` / `Joy-Con 2 (R)`)
 - [x] Player LED set after connect (L = P1, R = P2, stops pairing blink)
 - [x] Reconnect button (handles silent BLE disconnects from Windows)
@@ -61,6 +61,10 @@ If you want desktop cursor control, enable **Mouse mode (MVP)** in Quick Control
 - [x] Single Joy-Con mode — one Joy-Con alone maps its stick to the left-stick output automatically
 - [x] Dark Fluent UI with GDI+-drawn Joy-Con 2 silhouette visualizer (live button/stick state)
 - [x] Mouse mode (MVP): optical cursor, R/ZR click mapping, RS wheel scroll, stabilizer profiles
+- [x] Stick deadzone + low-pass filter — radial deadzone with enter/exit hysteresis and an error-feedback EMA, applied after normalisation
+- [x] Per-device stick calibration profiles — loaded from `%APPDATA%\Joycon2PC\calibration.json`, falling back to NS2 factory defaults (centre 1998, 746–3249)
+- [x] Diagnostics capture (`Diag 30s`) — 30 s window reporting report-interval p50/p95/p99, jitter, decode-failure rate and processing time; **Export log** / **Copy issues** dump it
+- [x] Change gate — the virtual controller is only written when the merged state actually differs, so the 120 Hz pump does not feed duplicate samples into the filter
 
 ---
 
@@ -87,13 +91,12 @@ If naming is still generic, connection may still work, but side identification r
 - [ ] **BLE connection latency & jitter** — measure P95 connect time, report interval std dev, and stick idle noise across all scenarios; fix bottlenecks (tracked: #12)
 - [ ] **Reduce build size** — current self-contained EXE is ~190 MB (full .NET 9 runtime bundled); switch to framework-dependent publish → ~28 MB with no code changes needed; self-contained cannot be trimmed (WinForms limitation)
 - [ ] **Auto-reconnect on sleep/resume** — Windows drops BLE on sleep; add `SystemEvents.PowerModeChanged` listener to trigger reconnect automatically
-- [ ] **Single Joy-Con sideways mode** — rotated button mapping when used alone (SL/SR → LB/RB, D-pad becomes face buttons for Joy-Con L sideways)
-- [ ] **SL / SR forwarding** — parsed but not sent to ViGEm; map to bumpers
+- [ ] **Single Joy-Con sideways mode** — rotated button mapping when used alone (D-pad becomes face buttons for Joy-Con L sideways)
 
 ### 🟡 Medium priority
 - [ ] **Grip button forwarding** — GripLeft/GripRight not forwarded to Xbox; no standard equivalent — could use custom paddles mapping
 - [ ] **Capture button** — no Xbox equivalent; could map to `Back`+`Guide` chord
-- [ ] **Stick dead-zone / calibration UI** — hardcoded factory values (centre=1998, range 746–3249); add per-controller calibration
+- [ ] **Stick calibration UI** — per-device profiles are already live in the pipeline and persist to `%APPDATA%\Joycon2PC\calibration.json`, but there is no UI to run a capture, so profiles can only be set by hand-editing that file
 - [ ] **System tray / background mode** — minimize to tray while gaming
 - [ ] **DS4 / DualSense output option** — add PS4 ViGEm target for games with better PlayStation support
 
@@ -107,10 +110,10 @@ If naming is still generic, connection may still work, but side identification r
 ---
 
 ### 🔧 Refactor / Repo cleanup
-- [ ] **Split `BLEScanner.cs`** (~400 lines mixing scan + GATT + rumble) into `BLEScanner.cs` (scan only) + `BLEConnection.cs` (per-device GATT lifecycle)
-- [ ] **Split `MainForm.cs`** (~1100 lines mixing UI + parsing + state) — extract `JoyconInputHandler.cs` for report parsing and state merge
+- [x] **Split `MainForm.cs`** — done: `MainForm.cs` (DPI scale + layout) / `MainForm.Options.cs` (options, Quick Controls, bridge status events) / `MainForm.Pipeline.cs` (scan, connect, dual merge, 120 Hz output pump, diagnostics); Joy-Con diagram extracted to `JoyConVisualizerPanel.cs`
+- [ ] **Split `BLEScanner.cs`** (~680 lines mixing scan + GATT + subcommands + rumble) into `BLEScanner.cs` (scan only) + `BLEConnection.cs` (per-device GATT lifecycle)
 - [ ] **Remove `SubcommandManager.cs` dependency** — NS2 uses `WriteWithoutResponse`; the ACK-based queue adds complexity for no benefit
-- [ ] **Clean up `Joycon2PC.App.csproj`** — ~20 lines of stale comments about removed packages
+- [ ] **Clean up `Joycon2PC.App.csproj`** — several stale comment blocks about removed packages
 
 ---
 
@@ -128,7 +131,6 @@ If naming is still generic, connection may still work, but side identification r
 
 ## What's Not Done / Known Limitations ❌
 - [ ] **Single Joy-Con sideways orientation** — rotated button layout (e.g. d-pad on right) for single-Joy-Con games not implemented
-- [ ] **SL / SR forwarding** — bits are parsed but not mapped to any Xbox button (no standard Xbox equivalent; could map to LB/RB override)
 - [ ] **Grip buttons forwarding** — parsed correctly but not forwarded to ViGEm (no Xbox equivalent; could map to a custom profile)
 
 ### Hardware Features
@@ -145,7 +147,7 @@ If naming is still generic, connection may still work, but side identification r
 - [ ] **System tray / background mode** — app window must stay open; no minimise-to-tray
 - [ ] **Virtual DS4 / DualSense output** — only Xbox 360 (XInput) output; no PlayStation controller emulation
 - [ ] **Per-game button remapping UI** — no built-in remapping; use Steam Input or reWASD for custom layouts
-- [ ] **Stick dead-zone / calibration UI** — hardcoded factory values (centre = 1998, range 746–3249); no per-controller calibration
+- [ ] **Stick calibration UI** — per-device profiles persist to `%APPDATA%\Joycon2PC\calibration.json` and default to the NS2 factory values (centre = 1998, 746–3249); no in-app UI to record them yet
 - [ ] **Capture button** — parsed but not forwarded (no Xbox equivalent)
 - [ ] **NS2 Pro Controller / other accessories** — device filter only tested with Joy-Con 2; untested with NS2 Pro Controller or other peripherals
 
@@ -182,23 +184,44 @@ dotnet publish src/Joycon2PC.App/Joycon2PC.App.csproj ^
   -o publish/
 ```
 
+### Run Tests
+
+`tests/Joycon2PC.Tests` is an xUnit project in `joycon2.sln` (109 tests, all passing as of this writing). It covers `NS2InputReportDecoder`, `SubcommandBuilder`, `StickCalibration`, `StickFilter` and the `ControllerReportGate`, and references Core + ViGEm only — no BLE or UI. It targets `net10.0`, so running it needs the .NET 10 SDK even though the app itself is `net9.0`.
+
+```powershell
+dotnet test joycon2.sln -c Debug
+```
+
 ---
 
 ## Project Structure
 
 ```
 src/
-  Joycon2PC.App/          # WinForms UI + BLE scanner (InTheHand.BluetoothLE)
+  Joycon2PC.App/          # WinForms UI + BLE (InTheHand.BluetoothLE)
     Bluetooth/
-      BLEScanner.cs       # Scan, connect, SPI init, notifications
-    MainForm.cs           # UI, state merge, ViGEm dispatch
-  Joycon2PC.Core/         # Protocol
-    JoyconParser.cs       # Report byte parsing
-    JoyconButton.cs       # SW2Button enum (26 buttons)
+      BLEScanner.cs       # Scan, connect, SPI init, notifications, rumble send
+    MainForm.cs           # DPI scale, design constants, control handles, layout
+    MainForm.Options.cs   # Option init, Quick Controls / mouse mode, bridge events
+    MainForm.Pipeline.cs  # Scan/connect loop, dual merge, 120 Hz output pump, diagnostics
+    JoyConVisualizerPanel.cs # GDI+-drawn Joy-Con 2 silhouette with live state
+    Theme.cs              # UiTheme: palette, type scale, spacing, GDI+ helpers
+    UiControls.cs         # Owner-drawn themed controls (buttons, toggles, cards…)
+    app.manifest          # Per-Monitor-V2 DPI awareness (see also the csproj)
+  Joycon2PC.Core/         # Protocol + stick conditioning (no WinForms/ViGEm deps)
+    NS2InputReportDecoder.cs # Live input-report decode (the actual runtime path)
+    JoyconState.cs        # Merged state snapshot
+    JoyconButton.cs       # SW2Button flags enum (25 defined bits)
+    StickCalibration.cs   # Per-axis asymmetric raw 12-bit → XInput + JSON profiles
+    StickFilter.cs        # Radial deadzone (hysteresis) + error-feedback low-pass
     SubcommandBuilder.cs  # Output command builders (LED, rumble, SPI)
     SubcommandManager.cs  # Reliable send queue
+    JoyconParser.cs       # Legacy parser; no call site, kept only because MainForm
+                          # still declares the field and subscribes to its event
   Joycon2PC.ViGEm/        # ViGEm bridge
-    ViGEmBridge.cs        # JoyconState → Xbox 360 axis/button mapping
+    ViGEmBridge.cs        # JoyconState → Xbox 360 axes/buttons, calibration + filter
+tests/
+  Joycon2PC.Tests/        # xUnit tests for Core + ViGEm
 ```
 
 ---
@@ -220,6 +243,7 @@ Based on reverse-engineering work by [Nohzockt/Switch2-Controllers](https://gith
 | Package | License |
 |---|---|
 | [InTheHand.BluetoothLE](https://github.com/inthehand/32feet) | MIT |
+| [Shiny.BluetoothLE](https://shinylib.net/) | MIT |
 | [Nefarius.ViGEm.Client](https://github.com/nefarius/ViGEm.NET) | MIT |
 | [ViGEmBus](https://github.com/nefarius/ViGEmBus) | BSD 3-Clause |
 
@@ -229,12 +253,3 @@ Based on reverse-engineering work by [Nohzockt/Switch2-Controllers](https://gith
 
 MIT — see [LICENSE](LICENSE)
 
-```powershell
-dotnet restore
-dotnet build src\Joycon2PC.App\Joycon2PC.App.csproj
-```
-
-Next steps:
-- Implement BLE scanner using Windows.Devices.Bluetooth.* APIs
-- Implement Joy‑Con protocol parsing (see linux `hid-nintendo.c`)
-- Integrate ViGEmClient for virtual controller output

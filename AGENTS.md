@@ -16,14 +16,19 @@
   - `dotnet build joycon2.sln -c Debug`
 - Run desktop app:
   - `dotnet run --project src/Joycon2PC.App/Joycon2PC.App.csproj`
+- Tests (xUnit, `tests/Joycon2PC.Tests` is in `joycon2.sln`; targets `net10.0`, so needs the .NET 10 SDK):
+  - `dotnet test joycon2.sln -c Debug`
 - Release publish (framework-dependent preferred for smaller size):
   - `dotnet publish src/Joycon2PC.App/Joycon2PC.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish/`
 
 ## Architecture
 - `src/Joycon2PC.App`: WinForms UI and BLE device lifecycle (scan/connect/reconnect/notifications).
-- `src/Joycon2PC.Core`: Joy-Con 2 protocol parsing and subcommand building.
-- `src/Joycon2PC.ViGEm`: Mapping Joy-Con state to virtual Xbox 360 controller via ViGEm.
-- Dependency direction: App -> Core, ViGEm; ViGEm -> Core.
+  - `MainForm` is a partial class in three halves: `MainForm.cs` (DPI scale, design constants, control handles, layout), `MainForm.Options.cs` (option init, Quick Controls, bridge status events), `MainForm.Pipeline.cs` (scan/connect loop, dual merge, 120 Hz output pump, diagnostics).
+  - UI is a custom design system, not stock WinForms: `Theme.cs` (`UiTheme` — palette, type scale, spacing, GDI+ helpers) plus `UiControls.cs` (owner-drawn `Themed*` controls). `JoyConVisualizerPanel.cs` draws the Joy-Con silhouette.
+  - DPI: `app.manifest` declares Per-Monitor-V2 *and* the csproj sets `ApplicationHighDpiMode`/`EnableWindowsFormsHighDpiAutoResizing=false` (MainForm scales itself). Both halves are deliberate; WFO0003 is suppressed.
+- `src/Joycon2PC.Core`: Joy-Con 2 protocol parsing, subcommand building, and stick conditioning (`StickCalibration`, `StickFilter`). No WinForms/ViGEm deps. Live decode path is `NS2InputReportDecoder`; `JoyconParser` is unreferenced dead code kept only because MainForm still holds the field.
+- `src/Joycon2PC.ViGEm`: Mapping Joy-Con state to virtual Xbox 360 controller via ViGEm. Owns the axis pipeline (calibrate → filter → deadzone rescale) and `ControllerReportGate`.
+- Dependency direction: App -> Core, ViGEm; ViGEm -> Core; Tests -> Core, ViGEm.
 
 ## Project Conventions
 - Treat this as a Windows-only desktop project; avoid proposing cross-platform runtime behavior unless explicitly requested.
@@ -35,15 +40,20 @@
 - Respect current conditional compilation in BLE code (for example `INTHEHAND` related blocks) unless task requires changing it.
 
 ## Pitfalls
-- Solution uses mixed target frameworks (`net9.0-windows10.0.22621.0` for App, `net7.0` for Core/ViGEm). Do not "normalize" framework versions unless requested.
+- Solution uses mixed target frameworks (`net9.0-windows10.0.22621.0` for App, `net7.0` for Core/ViGEm, `net10.0` for Tests). Do not "normalize" framework versions unless requested.
 - Bluetooth behavior depends on Windows BLE stack and real hardware state; avoid claiming reconnect or rumble fixes without validating flow.
-- There is currently no automated test project in this repository. If behavior changes, prefer adding focused validation steps and explicit manual verification notes.
+- There is an automated test project (`tests/Joycon2PC.Tests`, 109 passing xUnit tests as of this writing). It covers Core and ViGEm only — nothing BLE or UI. Put protocol/stick/bridge logic changes there; UI and BLE changes still need explicit manual verification notes.
+- `ViGEmBridge.UpdateFromState` is thread-confined to the output pump (`MainForm.OutputPumpLoopAsync`); the `StickFilter` fields and the `_lastSubmittedState` gate baseline are lock-free by design. A second caller needs synchronisation.
+- The output pump runs at 120 Hz while reports arrive at ~16.7 Hz. `ControllerReportGate` runs *before* the filters so the low-pass never sees duplicate targets.
 
 ## Key Reference Files
 - `README.md`
 - `src/Joycon2PC.App/Bluetooth/BLEScanner.cs`
-- `src/Joycon2PC.Core/JoyconParser.cs`
+- `src/Joycon2PC.App/MainForm.Pipeline.cs` (BLE loop, dual merge, output pump, diagnostics)
+- `src/Joycon2PC.Core/NS2InputReportDecoder.cs`
 - `src/Joycon2PC.Core/JoyconButton.cs`
+- `src/Joycon2PC.Core/StickCalibration.cs`
+- `src/Joycon2PC.Core/StickFilter.cs`
 - `src/Joycon2PC.ViGEm/ViGEmBridge.cs`
 
 ## /init-deep Command (Improved for Small Projects)
